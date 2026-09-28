@@ -23,6 +23,8 @@ function esc(s) {
 let authUser = null;
 let authMode = "login";
 let googleClientId = "";
+let githubOauthConfigured = false;
+const GH_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>';
 const tmToken = () => localStorage.getItem("tm_token") || "";
 const lastUser = () => { try { return JSON.parse(localStorage.getItem("tm_last_user") || "null"); } catch (e) { return null; } };
 const initialOf = (name) => (String(name || "?").trim().charAt(0) || "?").toUpperCase();
@@ -91,7 +93,8 @@ function renderActAuth() {
       <span class="g-acc-x" id="gForget" title="Remove">✕</span>
     </div>` : ""}
     ${googleClientId ? `<div id="gsiBtn"></div>` : ""}
-    ${(lu || googleClientId) ? `<div class="auth-or"><span>OR</span></div>` : ""}
+    ${githubOauthConfigured ? `<button class="gh-login-btn" id="ghLoginBtn">${GH_SVG}<span>Continue with GitHub</span></button>` : ""}
+    ${(lu || googleClientId || githubOauthConfigured) ? `<div class="auth-or"><span>OR</span></div>` : ""}
     <div class="auth-tabs">
       <button data-m="login" class="${authMode === "login" ? "active" : ""}">Log in</button>
       <button data-m="signup" class="${authMode === "signup" ? "active" : ""}">Sign up</button>
@@ -118,12 +121,15 @@ function renderActAuth() {
         renderActAuth();
         return;
       }
+      if (lu.provider === "github") { location.href = "/api/github/oauth/start?mode=login"; return; }
       if (lu.provider !== "password") { googleOneTap(); return; }
       authMode = "login"; renderActAuth();
       setTimeout(() => { const p = $("authPass"); if (p) p.focus(); }, 50);
     });
   }
   renderGsiButton("gsiBtn");
+  const ghb = $("ghLoginBtn");
+  if (ghb) ghb.addEventListener("click", () => { location.href = "/api/github/oauth/start?mode=login"; });
 }
 
 /* ---------- Google Sign-In (GIS) ---------- */
@@ -194,6 +200,29 @@ function onAuthSuccess(data) {
   renderAuthSlot(); renderActAuth(); closeLoginSheet();
 }
 
+/* "Login with GitHub": after GitHub redirects back with ?github=login&token=,
+   fetch the user for that token and sign in — same as onAuthSuccess. */
+async function handleGithubLoginReturn() {
+  let q;
+  try { q = new URLSearchParams(location.search); } catch (e) { return; }
+  if (q.get("github") === "error") {
+    history.replaceState(null, "", location.pathname);
+    const err = $("authErr"); if (err) err.textContent = "GitHub sign-in didn't complete — try again.";
+    return;
+  }
+  if (q.get("github") === "login" && q.get("token")) {
+    const tok = q.get("token");
+    history.replaceState(null, "", location.pathname);
+    try {
+      const r = await fetch("/api/auth/me", { headers: { Authorization: "Bearer " + tok } });
+      if (!r.ok) throw new Error("bad token");
+      onAuthSuccess({ token: tok, user: (await r.json()).user });
+    } catch (e) {
+      const err = $("authErr"); if (err) err.textContent = "GitHub sign-in didn't complete — try again.";
+    }
+  }
+}
+
 async function doAuthSubmit() { submitAuth("auth", authMode); }
 
 /* ---------- login bottom sheet: pops up on site open, like ChatGPT ---------- */
@@ -222,7 +251,8 @@ function renderLoginSheet() {
       <span class="g-acc-x" id="sheetForget" title="Remove">✕</span>
     </div>` : ""}
     ${googleClientId ? `<div id="gsiBtnSheet"></div>` : ""}
-    ${(lu || googleClientId) ? `<div class="auth-or"><span>OR</span></div>` : ""}
+    ${githubOauthConfigured ? `<button class="gh-login-btn" id="ghLoginBtnSheet">${GH_SVG}<span>Continue with GitHub</span></button>` : ""}
+    ${(lu || googleClientId || githubOauthConfigured) ? `<div class="auth-or"><span>OR</span></div>` : ""}
     <div class="auth-tabs">
       <button data-m="login" class="${sheetMode === "login" ? "active" : ""}">Log in</button>
       <button data-m="signup" class="${sheetMode === "signup" ? "active" : ""}">Sign up</button>
@@ -248,11 +278,14 @@ function renderLoginSheet() {
       renderLoginSheet();
       return;
     }
+    if (lu.provider === "github") { location.href = "/api/github/oauth/start?mode=login"; return; }
     if (lu.provider !== "password") { googleOneTap(); return; }
     sheetMode = "login"; renderLoginSheet();
     setTimeout(() => { const p = $("shPass"); if (p) p.focus(); }, 80);
   });
   renderGsiButton("gsiBtnSheet");
+  const ghbs = $("ghLoginBtnSheet");
+  if (ghbs) ghbs.addEventListener("click", () => { location.href = "/api/github/oauth/start?mode=login"; });
 }
 
 async function doLogout() {
@@ -922,11 +955,44 @@ function refreshSendBtn() {
   btn.title = has ? "Send" : "Voice input";
   btn.setAttribute("aria-label", has ? "Send" : "Voice input");
 }
+/* ---------- small talk: greetings shouldn't become "incidents" ---------- */
+function smallTalkReply(text) {
+  const t = text.trim().toLowerCase().replace(/[!.?…]+$/, "");
+  if (!t || t.length > 60) return null;
+  if (/^(hi+|hello+|hey+|yo|hiya|howdy|namaste|vanakkam|good\s?(morning|afternoon|evening|day)|greetings)(\s+(there|trace|buddy|all|everyone))?$/.test(t) && t.length <= 24) {
+    return `<p>Hey! I'm <b>Trace</b> — I turn your repo's incidents into organizational memory.</p><p>Paste an alert, an error, or describe what's broken, and I'll pull it apart, search past incidents, and suggest a fix.</p>`;
+  }
+  if (/^(how are you|how're you|how r u)\b/.test(t)) {
+    return `<p>Running smooth — memory's warm and ready. What incident are we digging into today?</p>`;
+  }
+  if (/^(who are you|what are you|what can you do|\bhelp\b|what is this|about you)\b/.test(t)) {
+    return `<p>I'm <b>Trace</b>, your incident-memory agent:</p><p>• <b>Investigate</b> — paste an alert or error and I'll break it down<br>• <b>Recall</b> — I search past incidents for similar ones<br>• <b>Recommend</b> — I suggest fixes based on what worked before<br>• <b>Learn</b> — resolve an incident and it becomes memory for next time</p><p>Try me — describe something that's broken.</p>`;
+  }
+  if (/^(thanks?|thank you|thx|nandri)\b/.test(t)) {
+    return `<p>Anytime! If the fix worked, resolve the incident so I remember it for next time.</p>`;
+  }
+  if (/^(bye|goodbye|see you|good ?night)\b/.test(t)) {
+    return `<p>See you! I'll keep watching the repos while you're away.</p>`;
+  }
+  if (/^(ok|okay+|k|cool|nice|great|awesome|sure)\b/.test(t)) {
+    return `<p>👍 What's next — another incident to investigate?</p>`;
+  }
+  return null;
+}
 function send() {
   const inp = $("input");
   const text = inp.value.trim();
   if (!text || busy) return;
   inp.value = ""; inp.style.height = "auto"; refreshSendBtn();
+  const chat = smallTalkReply(text);
+  if (chat) {
+    if (!currentChatTs) currentChatTs = Date.now();
+    addUserMsg(text);
+    const body = addAgentMsg();
+    say(body, chat);
+    saveTranscript();
+    return;
+  }
   investigate(alertFromText(text), text);
 }
 let recog = null, listening = false;
@@ -954,9 +1020,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   try {
     const s = await api("/api/settings");
     googleClientId = s.google_client_id || "";
+    githubOauthConfigured = !!s.github_oauth_configured;
   } catch (e) {}
   await authMe();
   renderAuthSlot(); renderActAuth(); renderRecents();
+  handleGithubLoginReturn();
   let sheetOff = false;
   try { sheetOff = !!sessionStorage.getItem("tm_sheet_off"); } catch (e) {}
   if (!authUser && !sheetOff) openLoginSheet();
