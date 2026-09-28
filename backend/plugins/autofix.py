@@ -106,7 +106,12 @@ def attempt_fix(state, problem: dict) -> dict[str, Any]:
     if not is_enabled(db, "autofix"):
         out["skipped"] = "autofix disabled"
         return out
-    if (db.meta_get("github_access_mode") or "write") != "write":
+    # per-user access mode: read-only connections never push code
+    try:
+        _mode = state.gh_mode_for(None)
+    except Exception:
+        _mode = db.meta_get("github_access_mode") or "write"
+    if _mode != "write":
         out["skipped"] = "GitHub is in read-only mode"
         return out
     if not token:
