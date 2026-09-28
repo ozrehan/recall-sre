@@ -1,0 +1,17 @@
+# Render blueprint for RecallSRE — zero-dependency Python backend.
+# One-click deploy also works from the Render dashboard with this file.
+services:
+  - type: web
+    name: recall-sre
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt || true"
+    startCommand: "python backend/server.py"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      # Optional: point at Hindsight Cloud for the real memory backend.
+      # - key: HINDSIGHT_URL
+      #   value: https://api.hindsight.vectorize.io
+      # - key: HINDSIGHT_API_KEY
+      #   sync: false
