@@ -70,6 +70,8 @@ BANK_ID = os.environ.get("HINDSIGHT_BANK_ID", "incident-memory-prod")
 GITHUB_REPO = gh_api.env_repo()
 GITHUB_TOKEN = gh_api.env_token()
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GITHUB_CLIENT_ID = os.environ.get("GITHUB_CLIENT_ID", "")
+GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "")
 SYNC_MINUTES = int(os.environ.get("GITHUB_SYNC_MINUTES", "5") or 5)
 
 
@@ -112,7 +114,6 @@ class State:
         self.agent = IncidentAgent(self.memory, llm=build_llm())
         db = self.memory.db
         self.github_repo = db.meta_get("github_repo") or GITHUB_REPO
-        self.github_token = GITHUB_TOKEN
         try:
             self.sync_minutes = int(db.meta_get("sync_minutes") or SYNC_MINUTES)
         except ValueError:
@@ -128,6 +129,22 @@ class State:
         self.github_repo = repo
         self.memory.db.meta_set("github_repo", repo)
         return {"repo": repo}
+
+    @property
+    def github_token(self) -> str:
+        """Effective token: OAuth grant (DB) wins, env PAT is fallback."""
+        try:
+            oauth = self.memory.db.meta_get("github_oauth_token")
+        except Exception:
+            oauth = ""
+        return oauth or GITHUB_TOKEN or ""
+
+    @property
+    def github_oauth_connected(self) -> bool:
+        try:
+            return bool(self.memory.db.meta_get("github_oauth_token"))
+        except Exception:
+            return False
 
     @property
     def github_repos(self) -> list:
@@ -253,6 +270,8 @@ class State:
             "github_connection": {**_gh_api.test_connection(self.github_token),
                 "repo_permissions": _gh_api.repo_permissions(
                     self.github_repo, self.github_token)},
+            "oauth_connected": self.github_oauth_connected,
+            "oauth_configured": bool(GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET),
             "repos": self.github_repos,
             "access_mode": self.github_access_mode(),
         }
@@ -345,6 +364,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _redirect(self, url: str):
+        self.send_response(302)
+        self.send_header("Location", url)
+        self.end_headers()
+
     def _read_json(self):
         length = int(self.headers.get("Content-Length", 0))
         if not length:
@@ -353,6 +377,41 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
+        if path == "/api/github/oauth/start":
+            if not (GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET):
+                return self._send(500, {"error": "GitHub OAuth not configured"})
+            host = self.headers.get("Host", "")
+            cb = "https://" + host + "/api/github/oauth/callback"
+            q = urllib.parse.urlencode({
+                "client_id": GITHUB_CLIENT_ID,
+                "redirect_uri": cb,
+                "scope": "repo",
+            })
+            return self._redirect("https://github.com/login/oauth/authorize?" + q)
+        if path == "/api/github/oauth/callback":
+            qs = urllib.parse.parse_qs(
+                urllib.parse.urlparse(self.path).query)
+            code = (qs.get("code") or [""])[0]
+            if not code:
+                return self._redirect("/?github=error")
+            try:
+                data = urllib.parse.urlencode({
+                    "client_id": GITHUB_CLIENT_ID,
+                    "client_secret": GITHUB_CLIENT_SECRET,
+                    "code": code,
+                }).encode()
+                req = urllib.request.Request(
+                    "https://github.com/login/oauth/access_token",
+                    data=data, headers={"Accept": "application/json"})
+                with urllib.request.urlopen(req, timeout=20) as r:
+                    tok = json.load(r)
+                access = tok.get("access_token", "")
+                if not access:
+                    return self._redirect("/?github=error")
+                STATE.memory.db.meta_set("github_oauth_token", access)
+                return self._redirect("/?github=connected")
+            except Exception:
+                return self._redirect("/?github=error")
         if path == "/api/health":
             m = STATE.memory
             return self._send(200, {
@@ -509,6 +568,12 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 return self._send(200, STATE.remove_github_repo(
                     body.get("repo", "")))
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+        if path == "/api/github/disconnect":
+            try:
+                STATE.memory.db.meta_set("github_oauth_token", "")
+                return self._send(200, {"disconnected": True})
             except Exception as e:
                 return self._send(500, {"error": str(e)})
         if path == "/api/github/mode":
