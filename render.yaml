@@ -11,7 +11,9 @@ services:
       - key: PYTHON_VERSION
         value: 3.12.0
       # Optional: point at Hindsight Cloud for the real memory backend.
-      # - key: HINDSIGHT_URL
-      #   value: https://api.hindsight.vectorize.io
+      # HINDSIGHT_API_KEY alone is enough — the Cloud URL is the default.
       # - key: HINDSIGHT_API_KEY
+      #   sync: false
+      # Optional: Groq key for LLM-synthesized recommendation briefings.
+      # - key: GROQ_API_KEY
       #   sync: false
