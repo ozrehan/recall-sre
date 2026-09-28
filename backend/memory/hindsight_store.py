@@ -193,13 +193,18 @@ class HindsightMemoryStore(MemoryStore):
         # recall() rejects queries over ~500 tokens — keep it tight
         query = query_text[:1500]
         tags = [f"service:{service}"] if service else None
+        # NOTE: prefer_observations must stay False. With True, recall returns
+        # consolidated "observation" results that carry no document_id and no
+        # incident_json metadata, so they degrade into junk lightweight cards
+        # (UUID ids, truncated summary text) instead of real incident matches.
+        # Raw world/experience facts carry document_id + incident_json.
         resp = self._bridge.call(
             "arecall",
             bank_id=self.bank_id,
             query=query,
             types=["world", "experience", "observation"],
             budget="high",
-            prefer_observations=True,
+            prefer_observations=False,
             tags=tags,
             tags_match="any" if tags else "any",
         )
@@ -218,6 +223,11 @@ class HindsightMemoryStore(MemoryStore):
         out = []
         for r, final in zip(results, finals):
             meta = r.metadata or {}
+            doc_id = r.document_id or ""
+            if not doc_id and not meta.get("incident_json"):
+                # Unattributable result (e.g. a consolidated observation with
+                # no source document link) — cannot become an incident match.
+                continue
             incident = None
             if meta.get("incident_json"):
                 try:
