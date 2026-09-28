@@ -1020,6 +1020,38 @@ function smallTalkReply(text) {
   }
   return null;
 }
+/* ---------- intent router: questions chat, incidents investigate ---------- */
+function looksLikeIncident(text) {
+  const t = text.toLowerCase();
+  // explicit investigation requests
+  if (/\binvestigate\b|\bfire\b.*\balert\b|\bscan\b.*\brepo\b/.test(t)) return true;
+  // stack traces, exceptions, log dumps
+  if (/traceback|^\s*at\s+\S+\s*\(|\berror\s*:|\bexception\b|[A-Za-z]+Error\b|\bfatal\b|\bpanic\b/i.test(text)) return true;
+  // incident vocabulary
+  if (/\b(5\d\d|timed?\s?out|outage|\bdown\b|crash(?:ed|ing)?|alert|firing|incident|segfault|oom\b|memory leak|disk full|deploy(?:ment)?\s+fail(?:ed|ure)?|build\s+fail(?:ed|ure)?|ci\s+fail(?:ed)?|pipeline\s+fail(?:ed|ure)?|rollback|hotfix|pagerduty|sev-?\d)\b/.test(t)) return true;
+  // "X is not working / broken / failing"
+  if (/\b(not working|isn'?t working|doesn'?t work|broken|fail(?:ed|ing|s)?\s+to)\b/.test(t)) return true;
+  return false;
+}
+async function chatWithTrace(text) {
+  if (!currentChatTs) currentChatTs = Date.now();
+  addUserMsg(text);
+  const body = addAgentMsg();
+  const typing = addTyping(body);
+  busy = true; refreshSendBtn();
+  try {
+    const r = await tmApi.post("/api/chat", { message: text });
+    typing.remove();
+    const reply = (r && r.reply) ? r.reply : "Hmm, I didn't catch that — try again?";
+    // plain-text reply -> safe paragraphs
+    say(body, esc(reply).split(/\n\s*\n/).map(p => `<p>${p.replace(/\n/g, "<br>")}</p>`).join(""));
+  } catch (e) {
+    typing.remove();
+    say(body, `<p>Couldn't reach me just now — check your connection and try again.</p>`);
+  }
+  busy = false; refreshSendBtn();
+  saveTranscript();
+}
 function send() {
   const inp = $("input");
   const text = inp.value.trim();
@@ -1034,6 +1066,7 @@ function send() {
     saveTranscript();
     return;
   }
+  if (!looksLikeIncident(text)) { chatWithTrace(text); return; }
   investigate(alertFromText(text), text);
 }
 let recog = null, listening = false;
