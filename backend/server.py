@@ -689,6 +689,7 @@ class Handler(BaseHTTPRequestHandler):
                 db = STATE.memory.db
                 with db._lock, db._conn() as c:
                     prof = auth_mod.get_profile(c, uid)
+                    repos = auth_mod.get_user_github(c, uid).get("repos", [])
                 if not prof:
                     return self._send(404, {"error": "no profile"})
                 try:
@@ -699,7 +700,37 @@ class Handler(BaseHTTPRequestHandler):
                     "incidents": stats.get("incidents", 0),
                     "investigations": stats.get("investigations", 0),
                 }
+                prof["repos"] = repos
                 return self._send(200, {"profile": prof})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+        if path == "/api/profile/public":
+            # Shareable profile page: ?u=<username>. No email, no auth needed.
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            username = (qs.get("username") or [""])[0].strip().lower()
+            try:
+                db = STATE.memory.db
+                with db._lock, db._conn() as c:
+                    row = c.execute(
+                        "SELECT id FROM users WHERE lower(username)=?",
+                        (username,)).fetchone() if username else None
+                    if not row:
+                        return self._send(404, {"error": "no such profile"})
+                    prof = auth_mod.get_profile(c, row[0])
+                    repos = auth_mod.get_user_github(c, row[0]).get("repos", [])
+                pub = {k: prof[k] for k in (
+                    "name", "username", "bio", "avatar_url",
+                    "socials", "created_at")}
+                try:
+                    stats = db.stats()
+                except Exception:
+                    stats = {}
+                pub["stats"] = {
+                    "incidents": stats.get("incidents", 0),
+                    "investigations": stats.get("investigations", 0),
+                }
+                pub["repos"] = repos
+                return self._send(200, {"profile": pub})
             except Exception as e:
                 return self._send(500, {"error": str(e)})
         # static files
