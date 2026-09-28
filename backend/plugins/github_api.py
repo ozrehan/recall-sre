@@ -56,14 +56,29 @@ def test_connection(token: str | None) -> dict:
         with urllib.request.urlopen(req, timeout=20) as r:
             user = json.load(r)
             scopes = r.headers.get("x-oauth-scopes", "")
-        return {
+        out = {
             "connected": True,
             "user": user.get("login"),
             "scopes": [x.strip() for x in scopes.split(",") if x.strip()],
             "can_write": any(x in scopes for x in ("repo", "public_repo")),
         }
+        return out
     except Exception as e:
         return {"connected": False, "reason": str(e)[:120]}
+
+
+def repo_permissions(repo: str, token: str | None) -> dict:
+    """What the token can do on this repo (admin/push/pull)."""
+    if not token:
+        return {"push": False, "reason": "no token"}
+    try:
+        data = _get(f"{API}/repos/{repo}", token)
+        perms = data.get("permissions", {})
+        return {"admin": bool(perms.get("admin")),
+                "push": bool(perms.get("push")),
+                "pull": bool(perms.get("pull"))}
+    except Exception as e:
+        return {"push": False, "reason": str(e)[:120]}
 
 
 # ---- read-only health -----------------------------------------------------
