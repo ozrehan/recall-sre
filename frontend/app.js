@@ -1,6 +1,12 @@
 /* TraceMind — ChatGPT-style chat logic */
 const $ = (id) => document.getElementById(id);
 
+/* black doodle siren icon (replaces the red siren emoji everywhere) */
+const SIREN_SVG = `<svg class="ico-siren" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.5v2.5"/><path d="M5.8 4.8l1.7 1.7"/><path d="M18.2 4.8l-1.7 1.7"/><path d="M3.5 11H6"/><path d="M20.5 11H18"/><path d="M8 15v-4.5a4 4 0 0 1 8 0V15"/><path d="M10.6 12.6a2.6 2.6 0 0 1 1.6-2.6"/><path d="M5.5 15h13l1.5 4.5H4z"/></svg>`;
+
+/* black doodle brain icon (replaces the color brain emoji everywhere) */
+const BRAIN_SVG = `<svg class="ico-brain" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 20.2C4.2 20.2 2.6 17.8 3.6 15.4 2.5 14 3 11.6 5 10.7 4.6 8.2 6.5 5.8 9 5.7 9.6 3.8 12.2 2.8 14 3.8 16 2.9 18.6 4.3 19.1 6.8c2 .6 3 2.5 2.2 4.4 1 1.5.4 3.9-1.6 4.9.1 2.3-2.3 4.3-4.7 3.9-2 1.4-5 1-8 .2z"/><path d="M7.6 8.3c1.2 1 1.4 2.9.3 4.2" stroke-width="1.2"/><path d="M11.6 6.1c1.6 1 2 3 .9 4.6" stroke-width="1.2"/><path d="M15.6 7.6c1.3 1.2 1.4 3.2.2 4.5" stroke-width="1.2"/><path d="M7 13.6c1.7.7 3.9.5 5.2-.8" stroke-width="1.2"/><path d="M10.6 16.9c1.7.8 3.9.5 5.2-.9" stroke-width="1.2"/></svg>`;
+
 let openIncidents = [];
 let busy = false;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -238,10 +244,10 @@ async function authMe() {
 /* ---------- chat primitives ---------- */
 function scrollBottom() { $("chat").scrollTop = $("chat").scrollHeight; }
 
-function addUserMsg(text) {
+function addUserMsg(text, isHtml = false) {
   const el = document.createElement("div");
   el.className = "msg user";
-  el.innerHTML = `<div class="bubble">${esc(text)}</div>`;
+  el.innerHTML = `<div class="bubble">${isHtml ? text : esc(text)}</div>`;
   thread().appendChild(el); scrollBottom();
 }
 function addAgentMsg() {
@@ -267,7 +273,7 @@ const say = (body, html) => { const p = document.createElement("div"); p.innerHT
 /* ---------- cards ---------- */
 function incidentCard(alert) {
   const gh = alert.github || {};
-  return `<div class="card"><h5>🚨 Live incident</h5>
+  return `<div class="card"><h5>${SIREN_SVG} Live incident</h5>
     <dl class="kv">
       <dt>service</dt><dd>${esc(alert.service)}</dd>
       <dt>severity</dt><dd class="alert">${esc(alert.severity)}</dd>
@@ -278,7 +284,7 @@ function incidentCard(alert) {
 }
 function matchesCard(matches, scoreLabel) {
   if (!matches.length)
-    return `<div class="card"><h5>🧠 Memory search</h5>
+    return `<div class="card"><h5>${BRAIN_SVG} Memory search</h5>
       <p>No similar past incidents in memory yet — the recommendation below says so honestly instead of guessing. Resolve this incident and it becomes the first memory of its kind.</p></div>`;
   const cards = matches.map((m, i) => `
     <div class="match${i === 0 ? " top" : ""}">
@@ -292,7 +298,7 @@ function matchesCard(matches, scoreLabel) {
         <p><b>Fix:</b> ${esc((m.fix || "").slice(0, 220))}</p>
       </details>
     </div>`).join("");
-  return `<div class="card"><h5>🧠 Memory search — ranked by ${esc(scoreLabel)}</h5>${cards}</div>`;
+  return `<div class="card"><h5>${BRAIN_SVG} Memory search — ranked by ${esc(scoreLabel)}</h5>${cards}</div>`;
 }
 function recCard(rec) {
   if (rec.mode === "cold_start")
@@ -339,7 +345,7 @@ function resolveCard(draft, onDone) {
     })});
     btn.disabled = false;
     if (res.error) { btn.textContent = "Error — try again"; return; }
-    wrap.innerHTML = `<div class="learned-ok">🧠 <b>Learned.</b> Stored as <b>${esc(res.id)}</b> — memory now holds <b>${res.memory_size}</b> incidents. Fire a similar incident and watch the agent recall this one.</div>`;
+    wrap.innerHTML = `<div class="learned-ok">${BRAIN_SVG} <b>Learned.</b> Stored as <b>${esc(res.id)}</b> — memory now holds <b>${res.memory_size}</b> incidents. Fire a similar incident and watch the agent recall this one.</div>`;
     scrollBottom(); refreshMemory(); saveTranscript(); onDone && onDone(res);
     logActivity("resolved", draft.title || "Incident resolved",
       `Root cause stored in memory — ${res.memory_size} incidents remembered`);
@@ -367,7 +373,7 @@ function fmtTime(ts) {
   const ap = h >= 12 ? "pm" : "am"; h = h % 12 || 12;
   return `${h}:${m} ${ap}`;
 }
-const ACT_ICON = { fired: "🚨", resolved: "✓" };
+const ACT_ICON = { fired: SIREN_SVG, resolved: "✓" };
 let actFilter = "all";
 function renderActivity() {
   const list = $("actList"); if (!list) return;
@@ -472,7 +478,8 @@ function openChat(ts) {
 async function investigate(alert, userLabel) {
   if (busy) return; busy = true;
   $("chips").style.display = "none";
-  addUserMsg(userLabel || `🚨 ${alert.title} — ${alert.service} · ${alert.severity}`);
+  if (userLabel) addUserMsg(userLabel);
+  else addUserMsg(`${SIREN_SVG} ${esc(alert.title)} — ${esc(alert.service)} · ${esc(alert.severity)}`, true);
   currentChatTs = logActivity("fired", alert.title, `${alert.service} · ${alert.severity} — investigation started`);
   const body = addAgentMsg();
   const t1 = addTyping(body);
