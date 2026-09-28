@@ -17,7 +17,7 @@ leaves with them.
 
 ## The idea: incident memory as a product
 
-For the Hindsight hackathon I built **RecallSRE**, an incident response agent
+For the Hindsight hackathon I built **TraceMind**, an incident response agent
 whose entire value proposition is persistent memory. The pitch is one line:
 
 > **Every production incident teaches the agent how to handle the next one.**
