@@ -1,4 +1,4 @@
-# Render blueprint for RecallSRE — zero-dependency Python backend.
+# Render blueprint for TraceMind — zero-dependency Python backend.
 # One-click deploy also works from the Render dashboard with this file.
 services:
   - type: web
