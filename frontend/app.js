@@ -12,7 +12,9 @@ let busy = false;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function api(path, opts = {}) {
-  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  const h = {"Content-Type": "application/json"};
+  try { const t = localStorage.getItem("tm_token"); if (t) h["Authorization"] = "Bearer " + t; } catch (e) {}
+  const r = await fetch(path, {headers: h, ...opts, headers: {...h, ...(opts.headers || {})}});
   return r.json();
 }
 function esc(s) {
@@ -464,10 +466,15 @@ function setPanel(panelId, scrimId, open) {
   $(scrimId).classList.toggle("show", open);
 }
 const tmApi = {
-  async get(p) { const r = await fetch(p); return r.json(); },
+  _auth() {
+    const h = {};
+    try { const t = localStorage.getItem("tm_token"); if (t) h["Authorization"] = "Bearer " + t; } catch (e) {}
+    return h;
+  },
+  async get(p) { const r = await fetch(p, {headers: this._auth()}); return r.json(); },
   async post(p, b) {
     const r = await fetch(p, {method: "POST",
-      headers: {"Content-Type": "application/json"},
+      headers: {...this._auth(), "Content-Type": "application/json"},
       body: JSON.stringify(b || {})});
     return r.json();
   },
@@ -566,7 +573,16 @@ function bindPanels() {
   $("ghScrim").addEventListener("click", () => setPanel("ghPanel", "ghScrim", false));
   $("plugClose").addEventListener("click", () => setPanel("plugPanel", "plugScrim", false));
   $("plugScrim").addEventListener("click", () => setPanel("plugPanel", "plugScrim", false));
-  $("ghOauthBtn").addEventListener("click", () => {
+  $("ghOauthBtn").addEventListener("click", async () => {
+    // Bind this GitHub grant to the logged-in user via a one-time nonce,
+    // so each login connects their OWN repos with their OWN token.
+    try {
+      const n = await tmApi.post("/api/github/oauth/nonce", {});
+      if (n && n.nonce) {
+        location.href = "/api/github/oauth/start?nonce=" + encodeURIComponent(n.nonce);
+        return;
+      }
+    } catch (e) {}
     location.href = "/api/github/oauth/start";
   });
   $("ghDisconnectBtn").addEventListener("click", async () => {
