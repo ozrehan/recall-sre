@@ -1,45 +1,53 @@
 #!/usr/bin/env python3
-"""TraceMind demo server — stdlib only, zero dependencies.
+"""TraceMind server — stdlib only, zero dependencies.
+
+Real incident pipeline (no demo data):
+
+  GitHub Issues (connected repo) ──sync──> SQLite ──retain──> Hindsight
+        │ new issue = new incident          │ db of record      │ semantic memory
+        │ closed issue = resolved + post-mortem learned
 
 Serves the frontend dashboard and exposes the agent API:
 
-  GET  /api/health       -> {ok, backend, memory_size, mode}
-  GET  /api/incidents    -> seeded incident catalog (scenario picker)
-  POST /api/investigate  -> {alert} -> {incident, matches, recommendation}
-  POST /api/resolve      -> {draft..., root_cause, fix, ...} -> {id, memory_size}
-  POST /api/mode         -> {mode: "trained"|"empty"} -> {mode, memory_size}
-  GET  /api/memory       -> {backend, size, recent:[...]}
+  GET  /api/health              -> {ok, backend, memory_size, github{...}}
+  GET  /api/incidents           -> real incidents from the database (open first)
+  POST /api/investigate         -> {alert} -> {incident, matches, recommendation}
+  POST /api/resolve             -> {draft..., root_cause, fix, ...} -> {id, memory_size}
+  GET  /api/memory              -> {backend, size, recent:[...]}
+  GET  /api/integrations/github -> {repo, last_sync_at, synced, open, ...}
+  POST /api/integrations/github/sync -> run a sync pass now
 
-The "time-travel" demo mode toggles between:
-  - trained: memory seeded with 28 historical incidents (Day 120)
-  - empty:   blank memory (Day 1 cold start)
-
-Memory backend selection:
-  - If HINDSIGHT_URL + HINDSIGHT_API_KEY are set and the hindsight SDK is
-    importable, HindsightMemoryStore is used for semantic recall.
-  - Otherwise LocalMemoryStore (TF-IDF) is used — the demo never breaks.
-  - Either way, every incident is ALSO stored in a local SQLite database
-    (backend/memory/db.py, DB_PATH env or backend/data/tracemind.db): the
-    queryable database of record plus an investigation audit log.
+Environment:
+  GITHUB_REPO        repo to watch, e.g. owner/name (default ozrehan/recall-sre)
+  GITHUB_TOKEN       optional: private repos + post recommendations as comments
+  HINDSIGHT_URL / HINDSIGHT_API_KEY  semantic memory (Hindsight Cloud)
+  HINDSIGHT_BANK_ID  memory bank (default incident-memory-prod)
+  GROQ_API_KEY       optional briefing synthesizer
+  DB_PATH            sqlite file (default backend/data/tracemind.db)
+  GITHUB_SYNC_MINUTES poll interval (default 5)
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+import threading
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.agent.core import IncidentAgent
+from backend.integrations import sync as gh_sync
+from backend.integrations import github_issues as gh_api
 from backend.memory.db import IncidentDB
 from backend.memory.hybrid_store import HybridMemoryStore
 from backend.memory.local_store import LocalMemoryStore
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.join(HERE, "..", "frontend")
-DATA_FILE = os.path.join(HERE, "data", "incidents.json")
 DB_PATH = os.environ.get("DB_PATH", os.path.join(HERE, "data", "tracemind.db"))
 
 MIME = {
@@ -47,8 +55,11 @@ MIME = {
     ".json": "application/json", ".png": "image/png", ".svg": "image/svg+xml",
 }
 
-
 CLOUD_URL = "https://api.hindsight.vectorize.io"
+BANK_ID = os.environ.get("HINDSIGHT_BANK_ID", "incident-memory-prod")
+GITHUB_REPO = gh_api.env_repo()
+GITHUB_TOKEN = gh_api.env_token()
+SYNC_MINUTES = int(os.environ.get("GITHUB_SYNC_MINUTES", "5") or 5)
 
 
 def build_memory():
@@ -59,10 +70,10 @@ def build_memory():
         url = os.environ.get("HINDSIGHT_URL")
         key = os.environ.get("HINDSIGHT_API_KEY")
         if key and not url:
-            # API key alone implies Hindsight Cloud.
-            url = CLOUD_URL
+            url = CLOUD_URL  # API key alone implies Hindsight Cloud
         if url or key:
-            semantic = HindsightMemoryStore(url=url or CLOUD_URL, api_key=key)
+            semantic = HindsightMemoryStore(url=url or CLOUD_URL,
+                                            api_key=key, bank_id=BANK_ID)
             backend_name = "hindsight"
             return HybridMemoryStore(semantic, DB_PATH), backend_name
     except Exception as e:  # SDK missing / unreachable -> fall back
@@ -82,42 +93,107 @@ def build_llm():
     return None
 
 
-def load_seed():
-    with open(DATA_FILE) as f:
-        return json.load(f)
-
-
 class State:
     def __init__(self):
-        self.seed_incidents = load_seed()
         mem, backend = build_memory()
         self.backend_name = backend
-        llm = build_llm()
-        self.trained = mem  # HybridMemoryStore: SQLite db of record + semantic recall
-        self.empty = LocalMemoryStore()
-        # database of record: restore from incidents.json when the db is empty
-        # (Render's disk is ephemeral, so this runs on every fresh deploy)
-        if self.trained.db.count() == 0:
-            for inc in self.seed_incidents:
-                self.trained.db.upsert_incident(dict(inc), source="seed")
-        # semantic layer: seed only if it has nothing (Hindsight upsert is
-        # idempotent, but 28 retains on every boot would just add latency)
-        if self.trained.semantic.count() == 0:
-            self.trained.semantic.seed(self.seed_incidents)
-        self.mode = "trained"
-        self.agents = {
-            "trained": IncidentAgent(self.trained, llm=llm),
-            "empty": IncidentAgent(self.empty),
+        self.memory = mem  # HybridMemoryStore: SQLite db of record + semantic
+        self.agent = IncidentAgent(self.memory, llm=build_llm())
+        db = self.memory.db
+        self.github_repo = db.meta_get("github_repo") or GITHUB_REPO
+        self.github_token = GITHUB_TOKEN
+        try:
+            self.sync_minutes = int(db.meta_get("sync_minutes") or SYNC_MINUTES)
+        except ValueError:
+            self.sync_minutes = SYNC_MINUTES
+        self.sync_status: dict = {"last": None, "running": False}
+
+    def set_github_repo(self, repo: str) -> dict:
+        """Change the watched repo at runtime (persisted in SQLite)."""
+        repo = (repo or "").strip()
+        if not re.match(r"^[\w.\-]+/[\w.\-]+$", repo):
+            return {"error": "repo must look like owner/name"}
+        self.github_repo = repo
+        self.memory.db.meta_set("github_repo", repo)
+        return {"repo": repo}
+
+    def set_sync_minutes(self, minutes: int) -> dict:
+        minutes = max(1, min(int(minutes), 1440))
+        self.sync_minutes = minutes
+        self.memory.db.meta_set("sync_minutes", str(minutes))
+        return {"sync_minutes": minutes}
+
+    def clear_database(self) -> dict:
+        """Wipe local incidents + sync state. Memory re-syncs from GitHub."""
+        db = self.memory.db
+        with db._lock, db._conn() as c:
+            c.execute("DELETE FROM incidents")
+            c.execute("DELETE FROM github_sync")
+            c.execute("DELETE FROM investigations")
+        return {"cleared": True, "incidents": db.count()}
+
+    def get_settings(self) -> dict:
+        db = self.memory.db
+        return {
+            "github_repo": self.github_repo,
+            "repo_url": f"https://github.com/{self.github_repo}",
+            "github_token_configured": bool(self.github_token),
+            "sync_minutes": self.sync_minutes,
+            "last_sync_at": db.meta_get("github_last_sync_at"),
+            "memory_backend": self.backend_name,
+            "hindsight_bank": BANK_ID if self.backend_name == "hindsight" else None,
+            "incidents_remembered": db.count(),
+            "groq_configured": bool(os.environ.get("GROQ_API_KEY")),
         }
 
-    def agent(self):
-        return self.agents[self.mode]
+    def sync_github_now(self) -> dict:
+        """One GitHub sync pass; safe to call from any thread."""
+        if self.sync_status.get("running"):
+            return {"error": "sync already running",
+                    **(self.sync_status.get("last") or {})}
+        self.sync_status["running"] = True
+        try:
+            result = gh_sync.sync_github(
+                self.memory, self.memory.db,
+                self.github_repo, self.github_token,
+                investigate_fn=lambda alert: self.agent.investigate(alert),
+            )
+            self.sync_status["last"] = result
+            return result
+        finally:
+            self.sync_status["running"] = False
 
-    def memory(self):
-        return self.trained if self.mode == "trained" else self.empty
+    def github_status(self) -> dict:
+        db = self.memory.db
+        counts = db.github_sync_counts(self.github_repo)
+        return {
+            "repo": self.github_repo,
+            "repo_url": f"https://github.com/{self.github_repo}",
+            "token_configured": bool(self.github_token),
+            "last_sync_at": db.meta_get("github_last_sync_at"),
+            "sync_interval_minutes": self.sync_minutes,
+            "running": self.sync_status.get("running", False),
+            "last_result": self.sync_status.get("last"),
+            **counts,
+        }
 
 
 STATE = State()
+
+
+def _sync_loop():
+    """Background: sync on boot, then every SYNC_MINUTES."""
+    try:
+        print(f"[sync] initial GitHub sync: {STATE.github_repo}")
+        STATE.sync_github_now()
+    except Exception as e:
+        print(f"[sync] initial sync failed: {e}")
+    while True:
+        time.sleep(max(STATE.sync_minutes, 1) * 60)
+        try:
+            STATE.sync_github_now()
+        except Exception as e:
+            print(f"[sync] periodic sync failed: {e}")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -144,31 +220,43 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
         if path == "/api/health":
-            m = STATE.memory()
-            db_size = m.db.count() if hasattr(m, "db") else 0
+            m = STATE.memory
             return self._send(200, {
                 "ok": True, "backend": STATE.backend_name,
-                "database": "sqlite" if hasattr(m, "db") else "none",
-                "mode": STATE.mode, "memory_size": m.count(),
-                "db_size": db_size,
+                "database": "sqlite",
+                "memory_size": m.count(),
+                "db_size": m.db.count(),
+                "github": {
+                    "repo": STATE.github_repo,
+                    "last_sync_at": STATE.memory.db.meta_get("github_last_sync_at"),
+                },
             })
         if path == "/api/incidents":
-            return self._send(200, {"incidents": STATE.seed_incidents})
+            # real incidents, open first then most recent
+            incs = STATE.memory.db.list(limit=50)
+            incs.sort(key=lambda i: (i.get("outcome") == "open",
+                                     i.get("started_at") or ""), reverse=True)
+            return self._send(200, {"incidents": [
+                {"id": i["id"], "title": i.get("title"),
+                 "service": i.get("service"), "severity": i.get("severity"),
+                 "outcome": i.get("outcome"), "started_at": i.get("started_at"),
+                 "github": (i.get("github_issue") or {})}
+                for i in incs
+            ]})
         if path == "/api/memory":
-            m = STATE.memory()
-            if hasattr(m, "db"):
-                recent = m.db.recent(5)
-            else:
-                recent = [m.get(i) for i in
-                          list(getattr(m, "_order", []))[-5:]][::-1]
-                recent = [r for r in recent if r]
+            m = STATE.memory
+            recent = m.db.recent(5)
             return self._send(200, {
-                "backend": STATE.backend_name, "mode": STATE.mode,
+                "backend": STATE.backend_name,
                 "size": m.count(),
                 "recent": [{"id": r["id"], "title": r["title"]} for r in recent],
             })
+        if path == "/api/integrations/github":
+            return self._send(200, STATE.github_status())
+        if path == "/api/settings":
+            return self._send(200, STATE.get_settings())
         if path == "/api/db/stats":
-            db = STATE.trained.db
+            db = STATE.memory.db
             s = db.stats()
             s["database"] = "sqlite"
             return self._send(200, s)
@@ -183,20 +271,20 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 offset = 0
             service = (qs.get("service", [None])[0] or None)
-            db = STATE.trained.db
+            db = STATE.memory.db
             return self._send(200, {
                 "total": db.count(),
                 "incidents": db.list(limit=limit, offset=offset, service=service),
             })
         if path.startswith("/api/db/incident/"):
             inc_id = urllib.parse.unquote(path[len("/api/db/incident/"):])
-            inc = STATE.trained.db.get(inc_id)
+            inc = STATE.memory.db.get(inc_id)
             if inc:
                 return self._send(200, {"incident": inc})
             return self._send(404, {"error": "incident not found"})
         if path == "/api/db/investigations":
             return self._send(200, {
-                "investigations": STATE.trained.db.recent_investigations(20),
+                "investigations": STATE.memory.db.recent_investigations(20),
             })
         # static files
         rel = path.lstrip("/") or "index.html"
@@ -217,12 +305,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/investigate":
             alert = body.get("alert", {})
             try:
-                result = STATE.agent().investigate(alert)
+                result = STATE.agent.investigate(alert)
                 return self._send(200, result)
             except Exception as e:
                 return self._send(500, {"error": str(e)})
         if path == "/api/resolve":
-            a = STATE.agent()
+            a = STATE.agent
             try:
                 result = a.resolve(
                     draft=body.get("draft", {}),
@@ -236,12 +324,27 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, result)
             except Exception as e:
                 return self._send(500, {"error": str(e)})
-        if path == "/api/mode":
-            mode = body.get("mode", "trained")
-            if mode in ("trained", "empty"):
-                STATE.mode = mode
-            m = STATE.memory()
-            return self._send(200, {"mode": STATE.mode, "memory_size": m.count()})
+        if path == "/api/integrations/github/sync":
+            try:
+                return self._send(200, STATE.sync_github_now())
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+        if path == "/api/settings":
+            try:
+                if "github_repo" in body:
+                    r = STATE.set_github_repo(body["github_repo"])
+                    if r.get("error"):
+                        return self._send(400, r)
+                if "sync_minutes" in body:
+                    STATE.set_sync_minutes(body["sync_minutes"])
+                return self._send(200, STATE.get_settings())
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+        if path == "/api/settings/clear-db":
+            try:
+                return self._send(200, STATE.clear_database())
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
         return self._send(404, {"error": "not found"})
 
     def do_OPTIONS(self):
@@ -253,11 +356,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    threading.Thread(target=_sync_loop, daemon=True,
+                     name="github-sync").start()
     port = int(os.environ.get("PORT", 8080))
     srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"TraceMind on http://localhost:{port} "
           f"(backend={STATE.backend_name}, database=sqlite:{DB_PATH}, "
-          f"memory={STATE.trained.count()})")
+          f"github={STATE.github_repo}, bank={BANK_ID})")
     srv.serve_forever()
 
 
