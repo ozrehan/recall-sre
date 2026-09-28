@@ -188,8 +188,48 @@ function resolveCard(draft, onDone) {
     if (res.error) { btn.textContent = "Error — try again"; return; }
     wrap.innerHTML = `<div class="learned-ok">🧠 <b>Learned.</b> Stored as <b>${esc(res.id)}</b> — memory now holds <b>${res.memory_size}</b> incidents. Fire a similar incident and watch the agent recall this one.</div>`;
     scrollBottom(); refreshMemory(); onDone && onDone(res);
+    logActivity("resolved", draft.title || "Incident resolved",
+      `Root cause stored in memory — ${res.memory_size} incidents remembered`);
   };
   return wrap;
+}
+
+/* ---------- activity panel ---------- */
+const ACT_KEY = "tm_activity_v1";
+function getActivity() {
+  try { return JSON.parse(localStorage.getItem(ACT_KEY) || "[]"); } catch (e) { return []; }
+}
+function logActivity(type, title, desc) {
+  const items = getActivity();
+  items.unshift({ type, title, desc, ts: Date.now() });
+  try { localStorage.setItem(ACT_KEY, JSON.stringify(items.slice(0, 100))); } catch (e) {}
+  renderActivity();
+}
+function fmtTime(ts) {
+  const d = new Date(ts);
+  let h = d.getHours(), m = String(d.getMinutes()).padStart(2, "0");
+  const ap = h >= 12 ? "pm" : "am"; h = h % 12 || 12;
+  return `${h}:${m} ${ap}`;
+}
+const ACT_ICON = { fired: "🚨", resolved: "✓" };
+let actFilter = "all";
+function renderActivity() {
+  const list = $("actList"); if (!list) return;
+  const items = getActivity().filter((a) => actFilter === "all" || a.type === actFilter);
+  if (!items.length) {
+    list.innerHTML = `<div class="act-empty">No activity yet.<br>Fire an incident to get started.</div>`;
+    return;
+  }
+  list.innerHTML = items.map((a) => `
+    <div class="act-item">
+      <div class="act-ico">${ACT_ICON[a.type] || "•"}</div>
+      <div><b>${esc(a.title)}</b><p>${esc(a.desc)}</p>
+      <span class="act-time">${fmtTime(a.ts)}</span></div>
+    </div>`).join("");
+}
+function setActPanel(open) {
+  $("actPanel").classList.toggle("open", open);
+  $("actScrim").classList.toggle("show", open);
 }
 
 /* ---------- flow ---------- */
@@ -198,6 +238,7 @@ async function investigate(alert, userLabel) {
   $("chips").style.display = "none";
   addUserMsg(userLabel || `🚨 ${alert.title} — ${alert.service} · ${alert.severity}`);
   addHistory(alert);
+  logActivity("fired", alert.title, `${alert.service} · ${alert.severity} — investigation started`);
   const body = addAgentMsg();
   const t1 = addTyping(body);
   const res = await api("/api/investigate", { method: "POST", body: JSON.stringify({ alert }) });
@@ -315,4 +356,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     b.addEventListener("click", () => setMode(b.dataset.mode)));
   $("burger").addEventListener("click", () => document.body.classList.toggle("side-open"));
   $("scrim").addEventListener("click", () => document.body.classList.remove("side-open"));
+  $("activityBtn").addEventListener("click", () => { renderActivity(); setActPanel(true); });
+  $("actClose").addEventListener("click", () => setActPanel(false));
+  $("actScrim").addEventListener("click", () => setActPanel(false));
+  document.querySelectorAll("#actTabs button").forEach((b) =>
+    b.addEventListener("click", () => {
+      actFilter = b.dataset.f;
+      document.querySelectorAll("#actTabs button").forEach((x) => x.classList.toggle("active", x === b));
+      renderActivity();
+    }));
 });
