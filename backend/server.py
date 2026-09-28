@@ -200,6 +200,41 @@ class State:
         self.memory.db.meta_set("github_access_mode", mode)
         return {"access_mode": mode}
 
+    # ---- per-user GitHub (each login connects their own repos) ----
+    def gh_for(self, user_id: int | None) -> dict:
+        """This user's GitHub settings: token, repos, access_mode.
+
+        Strictly per-user: another login never sees your repos.
+        Token falls back to the GITHUB_TOKEN env var (server owner's PAT)."""
+        if user_id:
+            db = self.memory.db
+            with db._lock, db._conn() as c:
+                s = auth_mod.get_user_github(c, user_id)
+            s["token"] = s["token"] or GITHUB_TOKEN or ""
+            return s
+        return {"token": GITHUB_TOKEN or "", "repos": [],
+                "access_mode": self.github_access_mode()}
+
+    def gh_token_for(self, user_id: int | None) -> str:
+        return self.gh_for(user_id)["token"]
+
+    def gh_repos_for(self, user_id: int | None) -> list:
+        return self.gh_for(user_id)["repos"]
+
+    def gh_mode_for(self, user_id: int | None) -> str:
+        return self.gh_for(user_id)["access_mode"]
+
+    def _gh_write(self, user_id: int, **kw) -> dict:
+        db = self.memory.db
+        with db._lock, db._conn() as c:
+            if "token" in kw:
+                auth_mod.set_user_github_token(c, user_id, kw["token"])
+            if "repos" in kw:
+                auth_mod.set_user_github_repos(c, user_id, kw["repos"])
+            if "mode" in kw:
+                auth_mod.set_user_github_mode(c, user_id, kw["mode"])
+            return auth_mod.get_user_github(c, user_id)
+
     def set_sync_minutes(self, minutes: int) -> dict:
         minutes = max(1, min(int(minutes), 1440))
         self.sync_minutes = minutes
@@ -233,9 +268,13 @@ class State:
             "github_oauth_configured": bool(GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET),
         }
 
-    def sync_github_now(self, repo: str | None = None) -> dict:
+    def sync_github_now(self, repo: str | None = None,
+                        user_id: int | None = None) -> dict:
         """One GitHub sync pass for one repo; safe to call from any thread."""
-        repo = repo or self.github_repo
+        gh = self.gh_for(user_id)
+        repo = repo or (gh["repos"] or [None])[0]
+        if not repo:
+            return {"error": "no repo connected"}
         if self.sync_status.get("running"):
             return {"error": "sync already running",
                     **(self.sync_status.get("last") or {})}
@@ -243,7 +282,7 @@ class State:
         try:
             result = gh_sync.sync_github(
                 self.memory, self.memory.db,
-                repo, self.github_token,
+                repo, gh["token"],
                 investigate_fn=lambda alert: self.agent.investigate(alert),
             )
             self.sync_status["last"] = result
@@ -251,12 +290,12 @@ class State:
         finally:
             self.sync_status["running"] = False
 
-    def sync_all_repos(self) -> dict:
-        """Sync every connected repo; returns per-repo results."""
+    def sync_all_repos(self, user_id: int | None = None) -> dict:
+        """Sync every connected repo for one user; returns per-repo results."""
         out = {}
-        for repo in self.github_repos:
+        for repo in self.gh_repos_for(user_id):
             try:
-                out[repo] = self.sync_github_now(repo)
+                out[repo] = self.sync_github_now(repo, user_id=user_id)
             except Exception as e:
                 out[repo] = {"error": str(e)[:120]}
         return out
@@ -269,8 +308,10 @@ class State:
     def plugin_toggle(self, plugin_id: str, enabled: bool) -> dict:
         return _set_plugin_enabled(self.memory.db, plugin_id, enabled)
 
-    def plugins_status(self) -> dict:
+    def plugins_status(self, user_id: int | None = None) -> dict:
         db = self.memory.db
+        gh = self.gh_for(user_id)
+        repo = (gh["repos"] or [None])[0]
         return {
             "plugins": self.plugins_list(),
             "sentinel": {
@@ -284,15 +325,14 @@ class State:
                 "enabled": _plugin_enabled(db, "autofix"),
                 "last": db.meta_get("autofix_last"),
             },
-            "github_repo": self.github_repo,
-            "repo_url": f"https://github.com/{self.github_repo}",
-            "github_connection": {**_gh_api.test_connection(self.github_token),
-                "repo_permissions": _gh_api.repo_permissions(
-                    self.github_repo, self.github_token)},
-            "oauth_connected": self.github_oauth_connected,
+            "github_repo": repo,
+            "repo_url": f"https://github.com/{repo}" if repo else "",
+            "github_connection": {**_gh_api.test_connection(gh["token"]),
+                "repo_permissions": _gh_api.repo_permissions(repo, gh["token"]) if repo else {}},
+            "oauth_connected": bool(gh["token"]),
             "oauth_configured": bool(GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET),
-            "repos": self.github_repos,
-            "access_mode": self.github_access_mode(),
+            "repos": gh["repos"],
+            "access_mode": gh["access_mode"],
         }
 
     def set_sentinel_minutes(self, minutes: int) -> dict:
@@ -300,17 +340,21 @@ class State:
         _set_plugin_setting(self.memory.db, "sentinel_minutes", str(minutes))
         return {"sentinel_minutes": minutes}
 
-    def sentinel_scan_now(self) -> dict:
-        """One sentinel pass + auto-fix attempts; safe from any thread."""
+    def sentinel_scan_now(self, user_id: int | None = None) -> dict:
+        """One sentinel pass + auto-fix attempts; safe from any thread.
+
+        When user_id is given, scans THAT user's repos with THEIR token
+        (per-user view); otherwise the legacy global view."""
         if self.sentinel_status.get("running"):
             return {"error": "sentinel scan already running"}
         self.sentinel_status["running"] = True
         try:
-            result = _sentinel.scan_once(self)
+            state = _UserState(self, user_id) if user_id else self
+            result = _sentinel.scan_once(state)
             fixes = []
             for p in result.get("problems", []):
                 try:
-                    fixes.append(_autofix.attempt_fix(self, p))
+                    fixes.append(_autofix.attempt_fix(state, p))
                 except Exception as e:
                     fixes.append({"error": str(e)[:120]})
             result["autofix"] = fixes
@@ -318,13 +362,18 @@ class State:
         finally:
             self.sentinel_status["running"] = False
 
-    def github_status(self) -> dict:
+    def github_status(self, user_id: int | None = None) -> dict:
         db = self.memory.db
-        counts = db.github_sync_counts(self.github_repo)
+        gh = self.gh_for(user_id)
+        repo = (gh["repos"] or [None])[0]
+        counts = db.github_sync_counts(repo) if repo else {}
         return {
-            "repo": self.github_repo,
-            "repo_url": f"https://github.com/{self.github_repo}",
-            "token_configured": bool(self.github_token),
+            "repo": repo,
+            "repo_url": f"https://github.com/{repo}" if repo else "",
+            "token_configured": bool(gh["token"]),
+            "oauth_connected": bool(gh["token"]),
+            "repos": gh["repos"],
+            "access_mode": gh["access_mode"],
             "last_sync_at": db.meta_get("github_last_sync_at"),
             "sync_interval_minutes": self.sync_minutes,
             "running": self.sync_status.get("running", False),
@@ -333,32 +382,79 @@ class State:
         }
 
 
+class _UserState:
+    """Per-user view of the global State, for background plugins.
+
+    Delegates everything to the real State except the GitHub settings,
+    which come from this user's own connection (their token, their repos,
+    their read/write mode)."""
+    def __init__(self, state, user_id):
+        object.__setattr__(self, "_s", state)
+        object.__setattr__(self, "_gh", state.gh_for(user_id))
+
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "_s"), name)
+
+    @property
+    def github_token(self):
+        return object.__getattribute__(self, "_gh")["token"]
+
+    @property
+    def github_repos(self):
+        return object.__getattribute__(self, "_gh")["repos"]
+
+    @property
+    def github_repo(self):
+        repos = object.__getattribute__(self, "_gh")["repos"]
+        return repos[0] if repos else ""
+
+    def gh_mode_for(self, user_id=None):
+        return object.__getattribute__(self, "_gh")["access_mode"]
+
+
 STATE = State()
 
 
-def _sync_loop():
-    """Background: sync on boot, then every SYNC_MINUTES."""
+def _github_user_ids() -> list:
+    """User ids with a GitHub token connected (for background loops)."""
     try:
-        print(f"[sync] initial GitHub sync: {STATE.github_repo}")
-        STATE.sync_github_now()
-    except Exception as e:
-        print(f"[sync] initial sync failed: {e}")
+        db = STATE.memory.db
+        with db._lock, db._conn() as c:
+            return auth_mod.users_with_github(c)
+    except Exception:
+        return []
+
+
+def _sync_loop():
+    """Background: sync on boot, then every SYNC_MINUTES (per user)."""
+    for uid in _github_user_ids():
+        try:
+            STATE.sync_all_repos(user_id=uid)
+        except Exception as e:
+            print(f"[sync] user {uid} boot sync failed: {e}")
     while True:
         time.sleep(max(STATE.sync_minutes, 1) * 60)
-        try:
-            STATE.sync_all_repos()
-        except Exception as e:
-            print(f"[sync] periodic sync failed: {e}")
+        for uid in _github_user_ids():
+            try:
+                STATE.sync_all_repos(user_id=uid)
+            except Exception as e:
+                print(f"[sync] user {uid} sync failed: {e}")
 
 
 def _sentinel_loop():
-    """Background: repo health scan every N minutes, even with site closed."""
+    """Background: repo health scan every N minutes, even with site closed.
+
+    Scans each connected user's repos with their own token."""
     import time as _t
     _t.sleep(60)  # let boot settle
     while True:
         try:
             if _plugin_enabled(STATE.memory.db, "sentinel"):
-                STATE.sentinel_scan_now()
+                for uid in _github_user_ids():
+                    try:
+                        STATE.sentinel_scan_now(user_id=uid)
+                    except Exception as e:
+                        print(f"[sentinel] user {uid} scan failed: {e}")
         except Exception as e:
             print(f"[sentinel] scan failed: {e}")
         try:
@@ -394,6 +490,24 @@ class Handler(BaseHTTPRequestHandler):
             return {}
         return json.loads(self.rfile.read(length) or b"{}")
 
+    def _uid(self):
+        """Logged-in TraceMind user id from the Bearer token, or None."""
+        h = self.headers.get("Authorization") or ""
+        tok = h[7:] if h.startswith("Bearer ") else ""
+        if not tok:
+            return None
+        try:
+            return auth_mod.verify_token(tok)
+        except Exception:
+            return None
+
+    def _require_uid(self):
+        uid = self._uid()
+        if not uid:
+            self._send(401, {"error": "login required"})
+            return None
+        return uid
+
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
         if path == "/api/github/oauth/start":
@@ -403,11 +517,19 @@ class Handler(BaseHTTPRequestHandler):
             cb = "https://" + host + "/api/github/oauth/callback"
             qs0 = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             login_mode = (qs0.get("mode") or [""])[0] == "login"
+            nonce = (qs0.get("nonce") or [""])[0]
+            if login_mode:
+                state = "login"
+            elif nonce:
+                state = "connect:" + nonce
+            else:
+                # legacy connect without a logged-in user: no per-user binding
+                state = "connect"
             q = urllib.parse.urlencode({
                 "client_id": GITHUB_CLIENT_ID,
                 "redirect_uri": cb,
                 "scope": "repo",
-                "state": "login" if login_mode else "connect",
+                "state": state,
             })
             return self._redirect("https://github.com/login/oauth/authorize?" + q)
         if path == "/api/github/oauth/callback":
@@ -430,17 +552,35 @@ class Handler(BaseHTTPRequestHandler):
                 access = tok.get("access_token", "")
                 if not access:
                     return self._redirect("/?github=error")
-                STATE.memory.db.meta_set("github_oauth_token", access)
                 state = (qs.get("state") or [""])[0]
                 if state == "login":
-                    # "Login with GitHub": also sign the user into TraceMind
+                    # "Login with GitHub": also sign the user into TraceMind,
+                    # and keep THEIR token on THEIR account (per-user).
                     try:
                         db = STATE.memory.db
                         with db._lock, db._conn() as c:
                             out = auth_mod.github_login(c, access)
+                            try:
+                                auth_mod.set_user_github_token(
+                                    c, out["user"]["id"], access)
+                            except Exception:
+                                pass
                         return self._redirect("/?github=login&token=" + urllib.parse.quote(out["token"], safe=""))
                     except Exception:
                         return self._redirect("/?github=error")
+                if state.startswith("connect:"):
+                    # "Connect repo": bind this GitHub token to the logged-in
+                    # user who started the flow (via the nonce).
+                    try:
+                        db = STATE.memory.db
+                        with db._lock, db._conn() as c:
+                            uid = auth_mod.consume_github_nonce(
+                                c, state[len("connect:"):])
+                            if uid:
+                                auth_mod.set_user_github_token(c, uid, access)
+                    except Exception:
+                        pass
+                    return self._redirect("/?github=connected")
                 return self._redirect("/?github=connected")
             except Exception:
                 return self._redirect("/?github=error")
@@ -477,11 +617,11 @@ class Handler(BaseHTTPRequestHandler):
                 "recent": [{"id": r["id"], "title": r["title"]} for r in recent],
             })
         if path == "/api/integrations/github":
-            return self._send(200, STATE.github_status())
+            return self._send(200, STATE.github_status(self._uid()))
         if path == "/api/plugins":
             return self._send(200, {"plugins": STATE.plugins_list()})
         if path == "/api/plugins/status":
-            return self._send(200, STATE.plugins_status())
+            return self._send(200, STATE.plugins_status(self._uid()))
         if path == "/api/settings":
             return self._send(200, STATE.get_settings())
         if path == "/api/db/stats":
@@ -540,6 +680,19 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
         body = self._read_json()
+        if path == "/api/github/oauth/nonce":
+            # Logged-in user starts "Connect with GitHub": mint a one-time
+            # nonce so the OAuth redirect binds the token back to them.
+            uid = self._require_uid()
+            if not uid:
+                return
+            try:
+                db = STATE.memory.db
+                with db._lock, db._conn() as c:
+                    nonce = auth_mod.create_github_nonce(c, uid)
+                return self._send(200, {"nonce": nonce})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
         if path == "/api/investigate":
             alert = body.get("alert", {})
             try:
@@ -563,8 +716,12 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._send(500, {"error": str(e)})
         if path == "/api/integrations/github/sync":
+            uid = self._require_uid()
+            if not uid:
+                return
             try:
-                return self._send(200, STATE.sync_github_now())
+                return self._send(200, STATE.sync_github_now(
+                    None, user_id=uid))
             except Exception as e:
                 return self._send(500, {"error": str(e)})
         if path == "/api/settings":
@@ -587,31 +744,56 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, {"error": str(e)})
         if path == "/api/plugins/scan":
             try:
-                return self._send(200, STATE.sentinel_scan_now())
+                return self._send(200, STATE.sentinel_scan_now(
+                    self._uid()))
             except Exception as e:
                 return self._send(500, {"error": str(e)})
         if path == "/api/github/repos/add":
+            uid = self._require_uid()
+            if not uid:
+                return
             try:
-                return self._send(200, STATE.add_github_repo(
-                    body.get("repo", "")))
+                repo = (body.get("repo", "") or "").strip()
+                if not re.match(r"^[\w.\-]+/[\w.\-]+$", repo):
+                    return self._send(400, {"error": "repo must look like owner/name"})
+                s = STATE.gh_for(uid)
+                repos = s["repos"]
+                if repo not in repos:
+                    repos.append(repo)
+                    s = STATE._gh_write(uid, repos=repos)
+                return self._send(200, {"repos": s["repos"]})
             except Exception as e:
                 return self._send(500, {"error": str(e)})
         if path == "/api/github/repos/remove":
+            uid = self._require_uid()
+            if not uid:
+                return
             try:
-                return self._send(200, STATE.remove_github_repo(
-                    body.get("repo", "")))
+                repo = (body.get("repo", "") or "").strip()
+                s = STATE.gh_for(uid)
+                repos = [r for r in s["repos"] if r != repo]
+                s = STATE._gh_write(uid, repos=repos)
+                return self._send(200, {"repos": s["repos"]})
             except Exception as e:
                 return self._send(500, {"error": str(e)})
         if path == "/api/github/disconnect":
+            uid = self._require_uid()
+            if not uid:
+                return
             try:
-                STATE.memory.db.meta_set("github_oauth_token", "")
+                db = STATE.memory.db
+                with db._lock, db._conn() as c:
+                    auth_mod.clear_user_github(c, uid)
                 return self._send(200, {"disconnected": True})
             except Exception as e:
                 return self._send(500, {"error": str(e)})
         if path == "/api/github/mode":
+            uid = self._require_uid()
+            if not uid:
+                return
             try:
-                return self._send(200, STATE.set_github_access_mode(
-                    body.get("mode", "read")))
+                s = STATE._gh_write(uid, mode=body.get("mode", "read"))
+                return self._send(200, {"access_mode": s["access_mode"]})
             except Exception as e:
                 return self._send(500, {"error": str(e)})
         if path == "/api/plugins/interval":
@@ -664,7 +846,37 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
 
+def _migrate_global_github():
+    """One-time: move legacy global github_repos to the first user, so
+    existing setups survive the switch to per-user GitHub connections.
+    The global token is NOT migrated (it may belong to another login)."""
+    try:
+        db = STATE.memory.db
+        raw = db.meta_get("github_repos")
+        if not raw:
+            return
+        import json as _j
+        repos = _j.loads(raw)
+        if not isinstance(repos, list) or not repos:
+            return
+        with db._lock, db._conn() as c:
+            auth_mod.ensure_schema(c)
+            first = c.execute(
+                "SELECT id FROM users ORDER BY id LIMIT 1").fetchone()
+            if not first:
+                return
+            cur = auth_mod.get_user_github(c, first[0])
+            if not cur["repos"]:
+                auth_mod.set_user_github_repos(c, first[0], repos)
+                print(f"[github] migrated {len(repos)} repo(s) to user {first[0]}")
+        db.meta_set("github_repos", "")
+        db.meta_set("github_repo", "")
+    except Exception as e:
+        print(f"[github] migration skipped: {e}")
+
+
 def main():
+    _migrate_global_github()
     threading.Thread(target=_sync_loop, daemon=True,
                      name="github-sync").start()
     threading.Thread(target=_sentinel_loop, daemon=True,
