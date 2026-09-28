@@ -1,4 +1,4 @@
-/* RecallSRE — ChatGPT-style monochrome chat UI */
+/* TraceMind — ChatGPT-style monochrome chat UI */
 :root {
   --bg: #ffffff;
   --side: #f7f7f7;
@@ -28,7 +28,7 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
 }
 .side-top { display: flex; flex-direction: column; gap: 10px; }
 .side-brand { display: flex; align-items: center; gap: 10px; padding: 2px 4px; }
-.logo { width: 34px; height: 34px; display: grid; place-items: center; background: #111; color: #fff; border-radius: 8px; font-size: 18px; }
+.logo { width: 34px; height: 34px; border-radius: 8px; flex: none; }
 .side-name { font-weight: 800; font-size: 15px; }
 .side-sub { font-size: 11px; color: var(--muted); }
 .newchat {
@@ -88,9 +88,10 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
   max-width: 75%; font-size: 14.5px; line-height: 1.6; white-space: pre-wrap;
 }
 .avatar {
-  flex: none; width: 30px; height: 30px; border-radius: 50%;
-  background: #111; color: #fff; display: grid; place-items: center; font-size: 15px;
+  flex: none; width: 30px; height: 30px; border-radius: 50%; overflow: hidden;
+  background: #0a0f1e; display: grid; place-items: center;
 }
+.avatar img { width: 100%; height: 100%; object-fit: cover; }
 .msg.agent .body { flex: 1; min-width: 0; font-size: 14.5px; line-height: 1.7; }
 .msg.agent .body p { margin-bottom: 10px; }
 .msg.agent .body p:last-child { margin-bottom: 0; }
