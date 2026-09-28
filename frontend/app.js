@@ -1,15 +1,10 @@
-/* RecallSRE dashboard logic — guided demo: fire → recall → recommend → teach */
+/* RecallSRE — ChatGPT-style chat logic */
 const $ = (id) => document.getElementById(id);
 
-/* Four demo scenarios. The first three mirror real archetypes in memory
-   (so matches are strong); the fourth is deliberately novel, showing the
-   agent's honest low-confidence path. */
 const SCENARIOS = [
   {
-    key: "pool",
-    sev: "CRITICAL", title: "payment-service returning 500s",
-    desc: "Error rate 34%, p99 latency 9s, deploy v3.1.2 went out 22 min ago.",
-    impact: "8,412 users affected · started 05:38 UTC",
+    key: "pool", sev: "CRITICAL", title: "payment-service returning 500s",
+    desc: "Error rate 34%, p99 9s, deploy v3.1.2 went out 22 min ago.",
     alert: {
       title: "payment-service returning 500 errors",
       service: "payment-service", severity: "critical",
@@ -22,14 +17,11 @@ const SCENARIOS = [
       ],
       logs_snippet: "2026-09-28T05:41:02Z ERROR [HikariPool-1 housekeeper] HikariPool-1 - Connection is not available, request timed out after 30000ms.",
       deployment: { version: "v3.1.2", deployed_at: "22 minutes ago" },
-      stats: { errorRate: "34%", latency: "9.1s p99", affected: "8,412 users", started: "05:38 UTC" },
     },
   },
   {
-    key: "flag",
-    sev: "HIGH", title: "checkout 404s after flag rollout",
-    desc: "Checkout success 99% → 0% at exactly 14:00 UTC, when the flag hit 100%.",
-    impact: "All checkouts failing · started 14:00 UTC",
+    key: "flag", sev: "HIGH", title: "checkout 404s after flag rollout",
+    desc: "Checkout 99% → 0% at exactly 14:00 UTC, flag hit 100%.",
     alert: {
       title: "checkout failing after feature flag rollout",
       service: "order-service", severity: "high",
@@ -41,14 +33,11 @@ const SCENARIOS = [
       ],
       logs_snippet: "2026-09-28T14:00:31Z ERROR [http-nio-8080-exec-55] PricingV2Exception: endpoint /v2/price not found (404)",
       deployment: { version: "v2.9.0", deployed_at: "3 days ago" },
-      stats: { errorRate: "100% checkout", latency: "—", affected: "all checkouts", started: "14:00 UTC" },
     },
   },
   {
-    key: "redis",
-    sev: "HIGH", title: "search-service cache collapse",
-    desc: "Cache hit rate 96% → 11%, connection pool exhausted, DB CPU 92%.",
-    impact: "21,300 users affected · started 06:02 UTC",
+    key: "redis", sev: "HIGH", title: "search-service cache collapse",
+    desc: "Cache hit 96% → 11%, pool exhausted, DB CPU 92%.",
     alert: {
       title: "search-service latency spike, cache failing",
       service: "search-service", severity: "high",
@@ -61,14 +50,11 @@ const SCENARIOS = [
       ],
       logs_snippet: "2026-09-28T06:12:44Z ERROR redis.clients.jedis.exceptions.JedisConnectionException: Could not get a resource from the pool",
       deployment: { version: "v2.6.2", deployed_at: "2 days ago" },
-      stats: { errorRate: "9%", latency: "3.1s p95", affected: "21,300 users", started: "06:02 UTC" },
     },
   },
   {
-    key: "novel",
-    sev: "MEDIUM", title: "websocket gateway dropping connections",
-    desc: "Unfamiliar signature — watch the agent admit it has no matching history.",
-    impact: "1,204 sessions affected · started 07:15 UTC",
+    key: "novel", sev: "MEDIUM", title: "websocket gateway dropping connections",
+    desc: "Unfamiliar signature — watch the agent admit it has no history.",
     alert: {
       title: "websocket gateway dropping idle connections",
       service: "api-gateway", severity: "medium",
@@ -81,227 +67,252 @@ const SCENARIOS = [
       ],
       logs_snippet: "2026-09-28T07:20:11Z WARN [ws-gateway] close code 1006 for 1,204 idle sessions in 60s window",
       deployment: { version: "v3.0.0", deployed_at: "3 days ago" },
-      stats: { errorRate: "ws drops 40x", latency: "—", affected: "1,204 sessions", started: "07:15 UTC" },
     },
   },
 ];
 
-let currentDraft = null;
 let seedIncidents = [];
+let busy = false;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
   return r.json();
 }
-
 function esc(s) {
   return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
-function setStep(n) {
-  for (let i = 1; i <= 4; i++) {
-    const el = $("step" + i);
-    el.classList.toggle("active", i === n);
-    el.classList.toggle("done", i < n);
-  }
-}
+/* ---------- chat primitives ---------- */
+function scrollBottom() { $("chat").scrollTop = $("chat").scrollHeight; }
 
-/* ---------- health / memory overview ---------- */
-async function refreshHealth() {
-  const h = await api("/api/health");
-  $("memCount").textContent = h.memory_size;
-  const bb = $("backendBadge");
-  bb.innerHTML = `memory: <b>${esc(h.backend)}</b> · ${h.memory_size} incidents`;
-  bb.classList.toggle("hindsight", h.backend === "hindsight");
-  document.querySelectorAll(".timetravel button").forEach((b) =>
-    b.classList.toggle("active", b.dataset.mode === h.mode));
-  const m = await api("/api/memory");
-  $("memStrip").innerHTML =
-    m.recent.map((r) => `<span class="memchip"><b>${esc(r.id)}</b> ${esc(r.title.slice(0, 40))}</span>`).join("") ||
-    `<span class="empty-note">Memory is empty — resolve an incident and it will be remembered here.</span>`;
-  renderStats(m, h);
+function addUserMsg(text) {
+  const el = document.createElement("div");
+  el.className = "msg user";
+  el.innerHTML = `<div class="bubble">${esc(text)}</div>`;
+  thread().appendChild(el); scrollBottom();
 }
-
-function renderStats(m, h) {
-  const mttrs = seedIncidents.map((i) => i.mttr_minutes).filter((x) => typeof x === "number");
-  const avgMttr = mttrs.length ? Math.round(mttrs.reduce((a, b) => a + b, 0) / mttrs.length) : "—";
-  const services = new Set(seedIncidents.map((i) => i.service)).size;
-  $("statsRow").innerHTML = `
-    <div class="stat"><div class="v green">${m.size}</div><div class="k">incidents remembered</div></div>
-    <div class="stat"><div class="v amber">${avgMttr}${avgMttr === "—" ? "" : " min"}</div><div class="k">avg resolution time</div></div>
-    <div class="stat"><div class="v blue">${services}</div><div class="k">services covered</div></div>
-    <div class="stat"><div class="v purple">${esc(h.backend)}</div><div class="k">memory backend</div></div>`;
-  renderGrowthChart();
+function addAgentMsg() {
+  const el = document.createElement("div");
+  el.className = "msg agent";
+  el.innerHTML = `<div class="avatar">🧠</div><div class="body"></div>`;
+  thread().appendChild(el); scrollBottom();
+  return el.querySelector(".body");
 }
-
-function renderGrowthChart() {
-  // bucket seed incidents by ISO week -> real data, shows memory accumulating
-  const buckets = {};
-  seedIncidents.forEach((i) => {
-    const d = (i.resolved_at || "").slice(0, 10);
-    if (!d) return;
-    buckets[d] = (buckets[d] || 0) + 1;
-  });
-  const days = Object.keys(buckets).sort().slice(-14);
-  if (!days.length) { $("growthChart").innerHTML = `<div class="empty-note">No data yet.</div>`; return; }
-  const max = Math.max(...days.map((d) => buckets[d]));
-  let cum = 0;
-  $("growthChart").innerHTML = days.map((d) => {
-    cum += buckets[d];
-    const h = Math.max(6, Math.round((cum / (seedIncidents.length || 1)) * 100));
-    return `<div class="cbar" title="${d}: ${cum} total"><b>${cum}</b><i style="height:${h}px"></i><span>${d.slice(5)}</span></div>`;
-  }).join("");
+function thread() {
+  let t = document.querySelector(".thread");
+  if (!t) { t = document.createElement("div"); t.className = "thread"; $("chat").appendChild(t); }
+  return t;
 }
-
-/* ---------- step 1: scenarios ---------- */
-function renderScenarios() {
-  $("scenarios").innerHTML = SCENARIOS.map((s, i) => `
-    <button class="scenario" data-i="${i}">
-      <div class="top"><span class="sev ${s.sev.toLowerCase()}">${s.sev}</span><span class="svc">${esc(s.alert.service)}</span></div>
-      <div class="t">${esc(s.title)}</div>
-      <div class="d">${esc(s.desc)}</div>
-      <div class="impact">⚠ <b>${esc(s.impact)}</b></div>
-    </button>`).join("");
-  document.querySelectorAll(".scenario").forEach((b) =>
-    b.addEventListener("click", () => investigate(SCENARIOS[+b.dataset.i])));
+function addTyping(body) {
+  const d = document.createElement("div");
+  d.className = "typing"; d.innerHTML = "<i></i><i></i><i></i>";
+  body.appendChild(d); scrollBottom();
+  return d;
 }
+const say = (body, html) => { const p = document.createElement("div"); p.innerHTML = html; body.appendChild(p); scrollBottom(); };
 
-/* ---------- steps 2 & 3 ---------- */
-function renderLive(alert, stats) {
-  $("livePanel").innerHTML = `
-    <h3><span class="dot"></span> Live incident — paging now</h3>
-    <div class="hint">What the on-call engineer sees at 05:38 UTC.</div>
+/* ---------- cards ---------- */
+function incidentCard(alert) {
+  return `<div class="card"><h5>🚨 Live incident</h5>
     <dl class="kv">
       <dt>service</dt><dd>${esc(alert.service)}</dd>
-      <dt>error rate</dt><dd class="big-red">${esc(stats.errorRate)}</dd>
-      <dt>latency</dt><dd>${esc(stats.latency)}</dd>
-      <dt>affected</dt><dd>${esc(stats.affected)}</dd>
-      <dt>started</dt><dd>${esc(stats.started)}</dd>
+      <dt>severity</dt><dd class="alert">${esc(alert.severity)}</dd>
+      <dt>signature</dt><dd>${esc(alert.error_signature)}</dd>
       <dt>deployed</dt><dd>${esc(alert.deployment.version)} · ${esc(alert.deployment.deployed_at)}</dd>
     </dl>
-    <div class="logbox">${esc(alert.logs_snippet)}</div>`;
+    <div class="logbox">${esc(alert.logs_snippet)}</div></div>`;
 }
-
-function renderMatches(matches, scoreLabel) {
-  if (!matches.length) {
-    $("matchPanel").innerHTML = `<h3>🧠 Hindsight memory</h3>
-      <div class="hint">Past incidents that look like this one — none found.</div>
-      <div class="empty-note">Day 1: the agent just joined the team.<br>It has <b>no history</b> to draw on, so its recommendation below will say so honestly.</div>`;
-    return;
-  }
-  $("matchPanel").innerHTML = `<h3>🧠 Hindsight memory</h3>
-    <div class="hint">Past incidents that look like this one — ranked by ${esc(scoreLabel)}.</div>` +
-    matches.map((m, i) => `
-      <div class="match${i === 0 ? " top" : ""}">
-        <div class="row">
-          <div><span class="rank">#${i + 1}</span><span class="id">${esc(m.id)}</span></div>
-          <div class="score">${m.score_pct}%<small>${esc(scoreLabel)}</small></div>
-        </div>
-        <div class="title">${esc(m.title)}</div>
-        <div class="bar"><i style="width:${m.score_pct}%"></i></div>
-        <div class="meta"><span>resolved ${esc(m.resolved_at?.slice(0, 10) ?? "—")}</span><span>MTTR <b>${m.mttr_minutes ?? "?"} min</b></span></div>
-        <details><summary>What was the fix?</summary>
-          <p><b>Root cause:</b> ${esc((m.root_cause || "").slice(0, 200))}${(m.root_cause || "").length > 200 ? "…" : ""}</p>
-          <p><b>Fix:</b> ${esc((m.fix || "").slice(0, 200))}${(m.fix || "").length > 200 ? "…" : ""}</p>
-        </details>
-      </div>`).join("");
+function matchesCard(matches, scoreLabel) {
+  if (!matches.length)
+    return `<div class="card"><h5>🧠 Memory search</h5>
+      <p>No similar past incidents found. Day 1: the agent just joined the team and has <b>no history</b> — the recommendation below says so honestly instead of guessing.</p></div>`;
+  const cards = matches.map((m, i) => `
+    <div class="match${i === 0 ? " top" : ""}">
+      <div class="row"><div><span class="id">${esc(m.id)}</span></div>
+        <div class="score">${m.score_pct}%<small>${esc(scoreLabel)}</small></div></div>
+      <div class="title">${esc(m.title)}</div>
+      <div class="bar"><i style="width:${m.score_pct}%"></i></div>
+      <div class="meta"><span>MTTR <b>${m.mttr_minutes ?? "?"} min</b></span></div>
+      <details><summary>What was the fix?</summary>
+        <p><b>Root cause:</b> ${esc((m.root_cause || "").slice(0, 220))}</p>
+        <p><b>Fix:</b> ${esc((m.fix || "").slice(0, 220))}</p>
+      </details>
+    </div>`).join("");
+  return `<div class="card"><h5>🧠 Memory search — ranked by ${esc(scoreLabel)}</h5>${cards}</div>`;
 }
-
-function renderRec(rec) {
-  if (rec.mode === "cold_start") {
-    $("recPanel").innerHTML = `<h3>⚡ Agent recommendation</h3>
-      <div class="rec-headline">🧊 ${esc(rec.headline)}
-        <span class="why">No historical incidents match this signature — the agent refuses to guess.</span>
+function recCard(rec) {
+  if (rec.mode === "cold_start")
+    return `<div class="card"><h5>⚡ Recommendation</h5>
+      <div class="rec-headline">🧊 ${esc(rec.headline)}<span class="why">No historical incidents match — the agent refuses to guess.</span></div>
+      <p style="font-size:13.5px">${esc(rec.body)}</p>
+      <ol class="steps-list">${rec.suggested_steps.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>
+      <div class="conf">⚠ ${esc(rec.confidence_note)} Resolve this incident below and the agent will remember it.</div></div>`;
+  const steps = (rec.suggested_steps || []).map((s) => {
+    const body = s.startsWith("`") && s.endsWith("`") ? `<span class="cmdchip">${esc(s.slice(1, -1))}</span>` : esc(s);
+    return `<li>${body}</li>`;
+  }).join("");
+  const causes = (rec.likely_causes || []).map((s) => `<li>${esc(s.slice(0, 180))}${s.length > 180 ? "…" : ""}</li>`).join("");
+  return `<div class="card"><h5>⚡ Recommendation</h5>
+    <div class="rec-headline">${esc(rec.headline)}<span class="why">Built from past incidents with the same signature — cited above.</span></div>
+    <p style="font-size:13.5px">${esc(rec.body)}</p>
+    ${causes ? `<p style="font-size:12px;color:var(--muted);margin:8px 0 2px"><b>Likely causes — seen before:</b></p><ul class="causes">${causes}</ul>` : ""}
+    <p style="font-size:12px;color:var(--muted);margin:8px 0 2px"><b>Investigation steps — in order:</b></p>
+    <ol class="steps-list">${steps}</ol>
+    <div class="conf">⚠ ${esc(rec.confidence_note)}</div></div>`;
+}
+function resolveCard(draft, onDone) {
+  const wrap = document.createElement("div");
+  wrap.className = "card";
+  wrap.innerHTML = `<h5>📝 Resolve &amp; teach — close the loop</h5>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:10px">The post-mortem goes into organizational memory, so the <i>next</i> similar incident starts smarter.</p>
+    <div class="rform">
+      <div><label>Root cause</label><textarea data-f="root" placeholder="e.g. DB connection pool exhausted after deploy v3.1.2"></textarea></div>
+      <div><label>Fix applied</label><textarea data-f="fix" placeholder="e.g. Raised pool max 100 → 300, added leak detection"></textarea></div>
+      <div class="two">
+        <div><label>Engineer</label><input data-f="eng" placeholder="on-call"></div>
+        <div><label>MTTR (minutes)</label><input data-f="mttr" type="number" min="1" value="8"></div>
       </div>
-      <div class="cold">${esc(rec.body)}</div>
-      <h4 style="font-size:11.5px;text-transform:uppercase;letter-spacing:1.2px;color:var(--muted);margin:16px 0 8px">Sane first steps (generic runbook)</h4>
-      <div class="rec"><ol class="steps-list">${rec.suggested_steps.map((s) => `<li>${esc(s)}</li>`).join("")}</ol></div>
-      <div class="conf">⚠ ${esc(rec.confidence_note)} Resolve this incident below and the agent will remember it.</div>`;
-    return;
-  }
-  $("recPanel").innerHTML = `<h3>⚡ Agent recommendation</h3>
-    <div class="rec">
-      <div class="rec-headline">${esc(rec.headline)}
-        <span class="why">Built from ${rec.likely_causes?.length ?? 0} past incident(s) with the same signature — cited below.</span>
-      </div>
-      <div style="font-size:14px;line-height:1.7;margin-bottom:4px">${esc(rec.body)}</div>
-      <h4>Likely causes — seen before</h4>
-      <ul class="causes">${(rec.likely_causes || []).map((s) => `<li>${esc(s.slice(0, 180))}${s.length > 180 ? "…" : ""}</li>`).join("")}</ul>
-      <h4>Suggested investigation steps — in order</h4>
-      <ol class="steps-list">${(rec.suggested_steps || []).map((s) => {
-        const body = s.startsWith("`") && s.endsWith("`")
-          ? `<span class="cmdchip">${esc(s.slice(1, -1))}</span>`
-          : esc(s);
-        return `<li>${body}</li>`;
-      }).join("")}</ol>
-      <div class="conf">⚠ ${esc(rec.confidence_note)}</div>
+      <div><button class="btn" data-act="save">Store in organizational memory →</button></div>
     </div>`;
+  const btn = wrap.querySelector("[data-act=save]");
+  btn.onclick = async () => {
+    const v = (k) => wrap.querySelector(`[data-f=${k}]`).value.trim();
+    if (!v("root") || !v("fix")) { btn.textContent = "Root cause + fix needed ↑"; setTimeout(() => btn.textContent = "Store in organizational memory →", 1500); return; }
+    btn.disabled = true; btn.textContent = "Storing…";
+    const res = await api("/api/resolve", { method: "POST", body: JSON.stringify({
+      draft, root_cause: v("root"), fix: v("fix"),
+      engineer: v("eng") || "on-call", mttr_minutes: parseInt(v("mttr") || "8", 10),
+    })});
+    btn.disabled = false;
+    if (res.error) { btn.textContent = "Error — try again"; return; }
+    wrap.innerHTML = `<div class="learned-ok">🧠 <b>Learned.</b> Stored as <b>${esc(res.id)}</b> — memory now holds <b>${res.memory_size}</b> incidents. Fire a similar incident and watch the agent recall this one.</div>`;
+    scrollBottom(); refreshMemory(); onDone && onDone(res);
+  };
+  return wrap;
 }
 
 /* ---------- flow ---------- */
-async function investigate(scn) {
-  setStep(2);
-  const res = await api("/api/investigate", { method: "POST", body: JSON.stringify({ alert: scn.alert }) });
-  if (res.error) { alert("error: " + res.error); return; }
-  currentDraft = res.incident;
-  renderLive(scn.alert, scn.alert.stats);
-  renderMatches(res.matches, res.score_label || "similar");
-  renderRec(res.recommendation);
-  setStep(3);
-  $("resolveSection").classList.remove("hidden");
-  $("learned").classList.remove("show");
-  ["fRoot", "fFix", "fSteps", "fCmds"].forEach((id) => { $(id).value = ""; });
+async function investigate(alert, userLabel) {
+  if (busy) return; busy = true;
+  $("chips").style.display = "none";
+  addUserMsg(userLabel || `🚨 ${alert.title} — ${alert.service} · ${alert.severity}`);
+  addHistory(alert);
+  const body = addAgentMsg();
+  const t1 = addTyping(body);
+  const res = await api("/api/investigate", { method: "POST", body: JSON.stringify({ alert }) });
+  t1.remove();
+  if (res.error) { say(body, `<p>Something went wrong: ${esc(res.error)}</p>`); busy = false; return; }
+
+  say(body, `<p>On it — pulling the alert apart and checking what we've seen before.</p>`);
+  await sleep(450);
+  say(body, incidentCard(alert));
+  const t2 = addTyping(body); await sleep(650); t2.remove();
+  say(body, `<p>Searching organizational memory for similar incidents…</p>`);
+  await sleep(350);
+  say(body, matchesCard(res.matches, res.score_label || "similarity"));
+  await sleep(450);
+  say(body, recCard(res.recommendation));
+  await sleep(300);
+  say(body, `<p>When it's fixed, teach me — that's how the memory grows:</p>`);
+  body.appendChild(resolveCard(res.incident));
+  scrollBottom();
+  busy = false;
 }
 
-async function resolveIncident(ev) {
-  ev.preventDefault();
-  const btn = $("resolveBtn");
-  btn.disabled = true;
-  const steps = $("fSteps").value.split(";").map((s) => s.trim()).filter(Boolean);
-  const cmds = $("fCmds").value.split(";").map((s) => s.trim()).filter(Boolean);
-  const res = await api("/api/resolve", {
-    method: "POST",
-    body: JSON.stringify({
-      draft: currentDraft,
-      root_cause: $("fRoot").value,
-      fix: $("fFix").value,
-      engineer: $("fEng").value || "on-call",
-      mttr_minutes: parseInt($("fMttr").value || "0", 10),
-      investigation_steps: steps,
-      commands_used: cmds,
-    }),
-  });
-  btn.disabled = false;
-  if (res.error) { alert("error: " + res.error); return; }
-  setStep(4);
-  $("learned").innerHTML = `🧠 <b>Learned.</b> Incident stored as <b>${esc(res.id)}</b> — organizational memory now holds <b>${res.memory_size}</b> incidents. Fire a similar incident and watch the agent recall this one.`;
-  $("learned").classList.add("show");
-  $("learned").scrollIntoView({ behavior: "smooth", block: "nearest" });
-  refreshHealth();
+function alertFromText(text) {
+  return {
+    title: text.length > 80 ? text.slice(0, 80) + "…" : text,
+    service: "unknown-service", severity: "medium",
+    error_signature: text,
+    symptoms: [text],
+    logs_snippet: text,
+    deployment: { version: "unknown", deployed_at: "unknown" },
+  };
 }
 
-async function setMode(mode) {
-  await api("/api/mode", { method: "POST", body: JSON.stringify({ mode }) });
-  setStep(1);
-  const msg = mode === "empty"
-    ? "🧊 <b>Day 1</b> — the agent just joined. Memory is blank: fire an incident and watch it admit it has no history."
-    : "🧠 <b>Day 120</b> — 28 incidents remembered. Fire the <i>same</i> incident and watch the difference memory makes.";
-  $("livePanel").innerHTML = `<h3><span class="dot"></span> Live incident</h3><div class="empty-note">${msg}</div>`;
-  $("matchPanel").innerHTML = `<h3>🧠 Hindsight memory</h3><div class="empty-note">${msg}</div>`;
-  $("recPanel").innerHTML = `<h3>⚡ Agent recommendation</h3><div class="empty-note">${msg}</div>`;
-  $("resolveSection").classList.add("hidden");
-  refreshHealth();
+/* ---------- history ---------- */
+function addHistory(alert) {
+  const empty = document.querySelector(".history-empty");
+  if (empty) empty.remove();
+  const b = document.createElement("button");
+  b.className = "hist-item";
+  b.innerHTML = `<span class="sevdot"></span><span class="t">${esc(alert.title)}</span>`;
+  b.title = alert.title;
+  b.onclick = () => investigate(alert);
+  $("historyList").prepend(b);
 }
 
-document.addEventListener("DOMContentLoaded", async () => {
-  renderScenarios();
-  setStep(1);
+/* ---------- memory sidebar ---------- */
+async function refreshMemory() {
   try {
-    const d = await api("/api/incidents");
-    seedIncidents = d.incidents || [];
-  } catch (e) { /* chart just stays empty */ }
-  refreshHealth();
+    const h = await api("/api/health");
+    $("memCount").textContent = h.memory_size;
+    $("memBackend").textContent = h.backend;
+    $("backendBadge").innerHTML = `memory: <b>${esc(h.backend)}</b>`;
+    document.querySelectorAll(".timetravel button").forEach((b) =>
+      b.classList.toggle("active", b.dataset.mode === h.mode));
+    const m = await api("/api/memory");
+    const mttrs = seedIncidents.map((i) => i.mttr_minutes).filter((x) => typeof x === "number");
+    $("memMttr").textContent = mttrs.length ? Math.round(mttrs.reduce((a, b) => a + b, 0) / mttrs.length) + " min" : "—";
+    $("memSvc").textContent = new Set(seedIncidents.map((i) => i.service)).size || "—";
+  } catch (e) { /* offline */ }
+}
+
+/* ---------- mode / new chat ---------- */
+function welcome(mode) {
+  $("chat").innerHTML = "";
+  $("chips").style.display = "";
+  const body = addAgentMsg();
+  const msg = mode === "empty"
+    ? `<p>🧊 <b>Day 1 — I just joined the team.</b> My memory is blank: fire an incident and I'll tell you honestly that I have no history to draw on.</p>
+       <p>Then flip to <b>Day 120</b> and fire the <i>same</i> incident — the difference is organizational memory.</p>`
+    : `<p>👋 I'm <b>RecallSRE</b> — I turn every production incident into organizational memory.</p>
+       <p>Fire an incident (pick one below or describe your own) and I'll search <b>past incidents</b>, show what fixed them, and recommend investigation steps — as evidence-backed hypotheses, never false certainty. When you resolve it, I'll remember the post-mortem.</p>`;
+  say(body, msg);
+}
+function renderChips() {
+  $("chips").innerHTML = SCENARIOS.map((s, i) =>
+    `<button class="chip" data-i="${i}"><span class="sevtag">${s.sev}</span>${esc(s.title)}</button>`).join("");
+  document.querySelectorAll(".chip").forEach((c) =>
+    c.addEventListener("click", () => investigate(SCENARIOS[+c.dataset.i].alert)));
+}
+async function setMode(mode) {
+  if (busy) return;
+  await api("/api/mode", { method: "POST", body: JSON.stringify({ mode }) });
+  welcome(mode); refreshMemory();
+}
+
+/* ---------- composer ---------- */
+function send() {
+  const inp = $("input");
+  const text = inp.value.trim();
+  if (!text || busy) return;
+  inp.value = ""; inp.style.height = "auto"; $("sendBtn").disabled = true;
+  investigate(alertFromText(text), text);
+}
+document.addEventListener("DOMContentLoaded", async () => {
+  renderChips();
+  welcome("trained");
+  try { const d = await api("/api/incidents"); seedIncidents = d.incidents || []; } catch (e) {}
+  refreshMemory();
+  const inp = $("input");
+  inp.addEventListener("input", () => {
+    inp.style.height = "auto"; inp.style.height = Math.min(inp.scrollHeight, 160) + "px";
+    $("sendBtn").disabled = !inp.value.trim();
+  });
+  inp.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+  $("sendBtn").addEventListener("click", send);
+  $("sendBtn").disabled = true;
+  $("newChatBtn").addEventListener("click", () => {
+    if (busy) return;
+    welcome(document.querySelector(".timetravel button.active").dataset.mode);
+    document.body.classList.remove("side-open");
+  });
   document.querySelectorAll(".timetravel button").forEach((b) =>
     b.addEventListener("click", () => setMode(b.dataset.mode)));
-  $("resolveForm").addEventListener("submit", resolveIncident);
+  $("burger").addEventListener("click", () => document.body.classList.toggle("side-open"));
+  $("scrim").addEventListener("click", () => document.body.classList.remove("side-open"));
 });
