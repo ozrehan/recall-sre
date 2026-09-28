@@ -840,7 +840,6 @@ class Handler(BaseHTTPRequestHandler):
             if not msg:
                 return self._send(400, {"error": "empty message"})
             key = os.environ.get("GROQ_API_KEY")
-            _chat_err = None
             if key:
                 try:
                     from backend.llm.groq import groq_chat, CHAT_SYSTEM
@@ -848,19 +847,16 @@ class Handler(BaseHTTPRequestHandler):
                     if not reply:
                         raise RuntimeError("empty reply")
                     return self._send(200, {"reply": reply, "via": "groq"})
-                except Exception as e:
-                    _chat_err = f"{type(e).__name__}: {e}"[:160]
-            resp = {
+                except Exception:
+                    pass  # fall through to the offline fallback below
+            return self._send(200, {
                 "reply": ("I'm Trace \u2014 I turn your repo's incidents into organizational "
                           "memory. Paste an alert, an error, or a stack trace and I'll "
                           "investigate it: break it down, search past incidents, and "
                           "suggest a fix. You can also connect a GitHub repo and I'll "
                           "watch its CI runs for you."),
                 "via": "fallback",
-            }
-            if _chat_err:
-                resp["debug"] = _chat_err
-            return self._send(200, resp)
+            })
         if path in ("/api/profile/follow", "/api/profile/unfollow"):
             uid = self._require_uid()
             if not uid:
