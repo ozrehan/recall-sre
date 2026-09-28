@@ -14,6 +14,15 @@ services:
       # HINDSIGHT_API_KEY alone is enough — the Cloud URL is the default.
       # - key: HINDSIGHT_API_KEY
       #   sync: false
+      # Memory bank for real incidents (fresh bank; the old demo bank is untouched).
+      - key: HINDSIGHT_BANK_ID
+        value: incident-memory-prod
+      # GitHub repo whose issues become TraceMind incidents (owner/name).
+      - key: GITHUB_REPO
+        value: ozrehan/recall-sre
+      # Optional: GitHub token — private repos + post recommendations as comments.
+      # - key: GITHUB_TOKEN
+      #   sync: false
       # Optional: Groq key for LLM-synthesized recommendation briefings.
       # - key: GROQ_API_KEY
       #   sync: false
