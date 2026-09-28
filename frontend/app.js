@@ -65,7 +65,11 @@ function googleOneTap() {
 function renderAuthSlot() {
   const slot = $("authSlot");
   if (authUser) {
-    slot.innerHTML = `<button class="uavatar trace-avatar" id="avatarBtn" title="${esc(authUser.name)} — profile & activity"><video src="profile.mp4" autoplay muted loop playsinline></video></button>`;
+    // The header avatar is YOU: your login account's photo, wolf fallback.
+    const av = (profData && profData.avatar_url)
+      ? `<img src="${esc(profData.avatar_url)}" alt="" style="width:100%;height:100%;object-fit:cover;display:block">`
+      : wolfSVG(wolfColor(userColorKey(profData || authUser)), "");
+    slot.innerHTML = `<button class="uavatar" id="avatarBtn" title="${esc(authUser.name)} — profile & activity" style="overflow:hidden;background:#f5f0e6">${av}</button>`;
   } else {
     slot.innerHTML = `<button class="loginbtn" id="loginBtn">Log in</button>`;
   }
@@ -1246,7 +1250,7 @@ function closeProfile() {
 async function refreshProfile() {
   try {
     const r = await tmApi.get("/api/profile");
-    if (r.profile) { profData = r.profile; renderProfile(); }
+    if (r.profile) { profData = r.profile; renderProfile(); renderAuthSlot(); renderActAuth(); }
   } catch (e) {}
 }
 function ppShareLink() {
