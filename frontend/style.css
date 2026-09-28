@@ -168,6 +168,7 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
   border: 1px solid var(--border); background: #fff;
 }
 .act-name { font-size: 24px; font-weight: 700; margin-top: 10px; }
+.act-beta { font-size: 11px; font-weight: 600; color: #666; background: #f0f0f0; border: 1px solid #ddd; border-radius: 4px; padding: 1px 6px; vertical-align: middle; letter-spacing: 0.5px; }
 .act-status { color: var(--muted); font-size: 14px; margin-top: 4px; display: flex; align-items: center; justify-content: center; gap: 6px; }
 .act-status .dot { width: 9px; height: 9px; border-radius: 50%; background: #16a34a; display: inline-block; }
 .act-tabs {
