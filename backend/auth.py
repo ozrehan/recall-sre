@@ -77,6 +77,19 @@ def ensure_schema(conn) -> None:
         conn.executescript(GITHUB_SCHEMA)
     except Exception:
         pass
+    # profile fields: username, bio, avatar, social links
+    for _col in ("username TEXT", "bio TEXT DEFAULT ''",
+                 "avatar_url TEXT DEFAULT ''",
+                 "socials TEXT DEFAULT '{}'"):
+        try:
+            conn.execute(f"ALTER TABLE users ADD COLUMN {_col}")
+        except Exception:
+            pass
+    try:
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username "
+                     "ON users(username)")
+    except Exception:
+        pass
 
 
 def _hash_password(password: str) -> str:
@@ -236,6 +249,7 @@ def google_login(conn, id_token: str, client_id: str) -> dict:
             (cur.lastrowid,)).fetchone()
         user = _public(row)
     user["provider"] = "google"
+    autofill_profile(conn, user["id"], avatar_url=info.get("picture"))
     return {"token": issue_token(user["id"]), "user": user}
 
 
@@ -303,6 +317,8 @@ def github_login(conn, access_token: str) -> dict:
             (cur.lastrowid,)).fetchone()
         user = _public(row)
     user["provider"] = "github"
+    autofill_profile(conn, user["id"], username=me.get("login"),
+                     avatar_url=me.get("avatar_url"))
     return {"token": issue_token(user["id"]), "user": user}
 
 
@@ -411,3 +427,146 @@ def users_with_github(conn) -> list:
             "SELECT user_id FROM user_github WHERE github_token<>''")]
     except Exception:
         return []
+
+
+# ---------- user profile ----------
+
+def get_profile(conn, user_id: int):
+    """Public profile for the settings/profile page."""
+    ensure_schema(conn)
+    row = conn.execute(
+        "SELECT id, name, email, created_at, username, bio, avatar_url, socials"
+        " FROM users WHERE id=?", (user_id,)).fetchone()
+    if not row:
+        return None
+    try:
+        socials = json.loads(row[7] or "{}")
+        if not isinstance(socials, dict):
+            socials = {}
+    except Exception:
+        socials = {}
+    return {"id": row[0], "name": row[1], "email": row[2],
+            "created_at": row[3], "username": row[4] or "",
+            "bio": row[5] or "", "avatar_url": row[6] or "",
+            "socials": socials}
+
+
+_USERNAME_RE = None
+
+def _username_re():
+    global _USERNAME_RE
+    if _USERNAME_RE is None:
+        import re as _re
+        _USERNAME_RE = _re.compile(r"^[a-zA-Z0-9_.]{3,30}$")
+    return _USERNAME_RE
+
+
+def update_profile(conn, user_id: int, name=None, username=None,
+                   bio=None, avatar_url=None, socials=None) -> dict:
+    """Update editable profile fields. Raises ValueError on bad input."""
+    ensure_schema(conn)
+    updates, params = [], []
+    if name is not None:
+        name = (name or "").strip()[:60]
+        if not name:
+            raise ValueError("name can't be empty")
+        updates.append("name=?")
+        params.append(name)
+    if username is not None:
+        username = (username or "").strip().lstrip("@").lower()
+        if username:
+            if not _username_re().match(username):
+                raise ValueError(
+                    "username must be 3-30 letters, numbers, . or _")
+            dup = conn.execute(
+                "SELECT id FROM users WHERE lower(username)=? AND id<>?",
+                (username, user_id)).fetchone()
+            if dup:
+                raise ValueError("that username is taken")
+            updates.append("username=?")
+            params.append(username)
+        else:
+            updates.append("username=NULL")
+    if bio is not None:
+        updates.append("bio=?")
+        params.append((bio or "").strip()[:280])
+    if avatar_url is not None:
+        avatar_url = (avatar_url or "").strip()
+        if len(avatar_url) > 600_000:
+            raise ValueError("profile picture is too large")
+        updates.append("avatar_url=?")
+        params.append(avatar_url)
+    if socials is not None:
+        # keep only known networks, normalize to full URLs
+        clean = _clean_socials(socials if isinstance(socials, dict) else {})
+        updates.append("socials=?")
+        params.append(json.dumps(clean))
+    if updates:
+        params.append(user_id)
+        conn.execute(f"UPDATE users SET {', '.join(updates)} WHERE id=?",
+                     params)
+    return get_profile(conn, user_id)
+
+
+def autofill_profile(conn, user_id: int, username=None,
+                     avatar_url=None) -> None:
+    """Fill empty username/avatar from an OAuth provider (best effort)."""
+    try:
+        ensure_schema(conn)
+        row = conn.execute(
+            "SELECT username, avatar_url FROM users WHERE id=?",
+            (user_id,)).fetchone()
+        if not row:
+            return
+        sets, params = [], []
+        if not row[0] and username and _username_re().match(username.lower()):
+            dup = conn.execute("SELECT id FROM users WHERE lower(username)=?",
+                               (username.lower(),)).fetchone()
+            if not dup:
+                sets.append("username=?")
+                params.append(username.lower())
+        if not row[1] and avatar_url:
+            sets.append("avatar_url=?")
+            params.append(avatar_url[:2000])
+        if sets:
+            params.append(user_id)
+            conn.execute(f"UPDATE users SET {', '.join(sets)} WHERE id=?",
+                         params)
+    except Exception:
+        pass
+
+
+# ---------- social links ----------
+
+SOCIAL_NETWORKS = ("linkedin", "leetcode", "twitter", "instagram",
+                   "github", "website")
+
+_SOCIAL_BASE = {
+    "linkedin": "https://www.linkedin.com/in/",
+    "leetcode": "https://leetcode.com/u/",
+    "twitter": "https://x.com/",
+    "instagram": "https://www.instagram.com/",
+    "github": "https://github.com/",
+}
+
+
+def _clean_socials(socials: dict) -> dict:
+    """Keep known networks; turn bare handles into full profile URLs."""
+    clean = {}
+    for net in SOCIAL_NETWORKS:
+        val = (socials.get(net) or "").strip()
+        if not val:
+            continue
+        if net == "website":
+            if not val.startswith(("http://", "https://")):
+                val = "https://" + val
+            clean[net] = val[:300]
+            continue
+        if "://" in val:
+            # full URL pasted: keep as-is if it's the right site
+            clean[net] = val[:300]
+            continue
+        handle = val.lstrip("@").strip("/")
+        if handle:
+            clean[net] = _SOCIAL_BASE[net] + handle
+    return clean
