@@ -734,6 +734,10 @@ class Handler(BaseHTTPRequestHandler):
                     "investigations": stats.get("investigations", 0),
                 }
                 prof["repos"] = repos
+                try:
+                    prof.update(auth_mod.follow_counts(c, uid))
+                except Exception:
+                    prof.update({"followers": 0, "following": 0})
                 return self._send(200, {"profile": prof})
             except Exception as e:
                 return self._send(500, {"error": str(e)})
@@ -763,6 +767,20 @@ class Handler(BaseHTTPRequestHandler):
                     "investigations": stats.get("investigations", 0),
                 }
                 pub["repos"] = repos
+                try:
+                    pub.update(auth_mod.follow_counts(c, row[0]))
+                except Exception:
+                    pub.update({"followers": 0, "following": 0})
+                pub["is_self"] = False
+                pub["is_following"] = False
+                try:
+                    viewer = self._uid()
+                    if viewer:
+                        pub["is_self"] = (viewer == row[0])
+                        pub["is_following"] = auth_mod.is_following(
+                            c, viewer, row[0])
+                except Exception:
+                    pass
                 return self._send(200, {"profile": pub})
             except Exception as e:
                 return self._send(500, {"error": str(e)})
@@ -839,6 +857,29 @@ class Handler(BaseHTTPRequestHandler):
                           "watch its CI runs for you."),
                 "via": "fallback",
             })
+        if path in ("/api/profile/follow", "/api/profile/unfollow"):
+            uid = self._require_uid()
+            if not uid:
+                return
+            username = (body.get("username") or "").strip().lower()
+            try:
+                db = STATE.memory.db
+                with db._lock, db._conn() as c:
+                    row = c.execute(
+                        "SELECT id FROM users WHERE lower(username)=?",
+                        (username,)).fetchone() if username else None
+                    if not row:
+                        return self._send(404, {"error": "no such profile"})
+                    if path.endswith("/follow"):
+                        counts = auth_mod.follow(c, uid, row[0])
+                    else:
+                        counts = auth_mod.unfollow(c, uid, row[0])
+                counts["is_following"] = path.endswith("/follow")
+                return self._send(200, counts)
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
         if path == "/api/investigate":
             alert = body.get("alert", {})
             try:
