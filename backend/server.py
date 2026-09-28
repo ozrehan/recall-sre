@@ -60,6 +60,7 @@ CLOUD_URL = "https://api.hindsight.vectorize.io"
 BANK_ID = os.environ.get("HINDSIGHT_BANK_ID", "incident-memory-prod")
 GITHUB_REPO = gh_api.env_repo()
 GITHUB_TOKEN = gh_api.env_token()
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 SYNC_MINUTES = int(os.environ.get("GITHUB_SYNC_MINUTES", "5") or 5)
 
 
@@ -145,6 +146,7 @@ class State:
             "hindsight_bank": BANK_ID if self.backend_name == "hindsight" else None,
             "incidents_remembered": db.count(),
             "groq_configured": bool(os.environ.get("GROQ_API_KEY")),
+            "google_client_id": GOOGLE_CLIENT_ID,
         }
 
     def sync_github_now(self) -> dict:
@@ -373,6 +375,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, {"error": str(e)})
         if path == "/api/auth/logout":
             return self._send(200, {"ok": True})
+        if path == "/api/auth/google":
+            try:
+                db = STATE.memory.db
+                with db._lock, db._conn() as c:
+                    out = auth_mod.google_login(c, body.get("credential", ""),
+                                                GOOGLE_CLIENT_ID)
+                return self._send(200, out)
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
         return self._send(404, {"error": "not found"})
 
     def do_OPTIONS(self):
