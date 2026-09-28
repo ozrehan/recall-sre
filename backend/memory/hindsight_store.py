@@ -208,7 +208,9 @@ class HindsightMemoryStore(MemoryStore):
             tags=tags,
             tags_match="any" if tags else "any",
         )
-        results = list(resp.results or [])[:top_k]
+        # fetch extra: dedup by incident below can collapse several facts
+        # from the same incident into one card
+        results = list(resp.results or [])[: max(top_k * 3, top_k)]
         max_final = 0.0
         finals = []
         for r in results:
@@ -221,6 +223,7 @@ class HindsightMemoryStore(MemoryStore):
         max_final = max(finals) if finals else 0.0
 
         out = []
+        seen_ids: set[str] = set()
         for r, final in zip(results, finals):
             meta = r.metadata or {}
             doc_id = r.document_id or ""
@@ -244,8 +247,16 @@ class HindsightMemoryStore(MemoryStore):
                     "root_cause": r.text or "",
                     "fix": "",
                 }
+            inc_key = str(incident.get("id") or "")
+            if inc_key in seen_ids:
+                # multiple recalled facts can belong to the same incident —
+                # keep only the highest-scoring card per incident
+                continue
+            seen_ids.add(inc_key)
             score = (final / max_final) if max_final > 0 else 0.0
             out.append({"incident": incident, "score": round(score, 4)})
+            if len(out) >= top_k:
+                break
         return out
 
     def get(self, incident_id: str) -> dict[str, Any] | None:
