@@ -86,7 +86,7 @@ function renderActAuth() {
       <button class="logoutbtn" id="logoutBtn">Log out</button>
     </div></div>`;
     $("logoutBtn").addEventListener("click", (e) => { e.stopPropagation(); doLogout(); });
-    $("userChip").addEventListener("click", openProfile);
+    $("userChip").addEventListener("click", () => openProfile());
     return;
   }
   const lu = lastUser();
@@ -1210,7 +1210,9 @@ function ppToast(msg) {
 }
 function profJoined(p) {
   try {
+    if (!p.created_at) return "";
     const d = new Date(p.created_at);
+    if (isNaN(d.getTime())) return "";
     return "Joined " + d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
   } catch (e) { return ""; }
 }
@@ -1220,6 +1222,7 @@ function profAvatar(p, cls) {
 }
 // openProfile(): no arg = own page; username string = someone's public page (?u=)
 function openProfile(username) {
+  if (typeof username !== "string") username = null; // never treat a click event as a username
   profIsPublic = !!username;
   profEdit = false;
   profData = null;
