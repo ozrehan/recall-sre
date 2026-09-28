@@ -34,6 +34,9 @@
       <div class="memrow"><span>backend</span><b id="memBackend">…</b></div>
       <div class="memrow"><span>database</span><b id="memDb">…</b></div>
     </div>
+    <button class="ghpill side" id="ghPill" title="Incident source — open settings">
+      <span class="dot"></span><span id="ghPillText">connecting…</span>
+    </button>
 
     <div class="side-foot">
       <div class="pill" id="backendBadge">memory: <b>…</b></div>
@@ -45,15 +48,15 @@
   <!-- ============ MAIN ============ -->
   <div class="main">
     <header class="chathead">
-      <button class="burger" id="burger">☰</button>
-      <div class="chead-title">
-        <b>TraceMind</b>
-        <span>Turn incidents into insight.</span>
+      <button class="burger" id="burger" title="Menu">☰</button>
+      <div class="chead-brand">
+        <img class="chead-logo" src="logo-icon.png" alt="TraceMind">
+        <div class="chead-title"><b>TraceMind</b><span>Turn incidents into insight.</span></div>
       </div>
-      <button class="ghpill" id="ghPill" title="Incident source — open settings">
-        <span class="dot"></span><span id="ghPillText">connecting…</span>
-      </button>
-      <button class="iconbtn" id="settingsBtn" title="Settings">⚙</button>
+      <div class="chead-right">
+        <button class="iconbtn" id="settingsBtn" title="Settings">⚙</button>
+        <button class="avatarbtn" id="avatarBtn" title="Profile"><img src="logo-icon.png" alt="TM"></button>
+      </div>
     </header>
 
     <div class="chat" id="chat"></div>
