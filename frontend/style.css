@@ -510,3 +510,42 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
 .loginsheet .auth-go { padding: 13px 0; font-size: 15px; border-radius: 10px; }
 #gsiBtnSheet { display: flex; justify-content: center; margin-bottom: 4px; min-height: 40px; }
 #gsiBtnSheet > div { width: 100% !important; }
+
+/* ---------- GitHub + Plugins panels ---------- */
+.gh-mark { width: 64px; height: 64px; margin: 0 auto 6px; color: #111; }
+.gh-mark svg { width: 100%; height: 100%; }
+.plug-card {
+  border: 1px solid var(--border); border-radius: 14px;
+  padding: 14px 16px; margin-bottom: 12px; background: #fff;
+}
+.plug-card b { font-size: 15px; }
+.plug-head { display: flex; align-items: center; justify-content: space-between; }
+.plug-sub { font-size: 13px; color: var(--muted); margin: 6px 0 0; line-height: 1.5; }
+.gh-row { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+.gh-row input, .gh-row select {
+  flex: 1; border: 1px solid var(--border); border-radius: 10px;
+  padding: 9px 12px; font-size: 14px; background: #fff; color: #111;
+}
+.btn-dark {
+  border: 0; background: #111; color: #fff; border-radius: 10px;
+  padding: 9px 16px; font-size: 14px; cursor: pointer; white-space: nowrap;
+}
+.btn-link { font-size: 13.5px; color: #111; white-space: nowrap; }
+.finding {
+  border: 1px solid #fecaca; background: #fef2f2; border-radius: 10px;
+  padding: 9px 12px; margin-top: 8px; font-size: 13.5px;
+}
+.finding b { font-size: 13.5px; }
+/* toggle switch */
+.switch { position: relative; width: 44px; height: 25px; flex: none; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch span {
+  position: absolute; inset: 0; background: #d4d4d4; border-radius: 999px;
+  transition: .2s; cursor: pointer;
+}
+.switch span:before {
+  content: ""; position: absolute; width: 19px; height: 19px; left: 3px; top: 3px;
+  background: #fff; border-radius: 50%; transition: .2s;
+}
+.switch input:checked + span { background: #111; }
+.switch input:checked + span:before { transform: translateX(19px); }
