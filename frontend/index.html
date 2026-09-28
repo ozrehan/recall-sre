@@ -37,6 +37,7 @@
     <button class="ghpill side" id="ghPill" title="Incident source — open settings">
       <span class="dot"></span><span id="ghPillText">connecting…</span>
     </button>
+    <button class="side-settings" id="settingsBtn">⚙ Settings</button>
 
     <div class="side-foot">
       <div class="pill" id="backendBadge">memory: <b>…</b></div>
@@ -54,7 +55,6 @@
         <div class="chead-title"><b>TraceMind</b><span>Turn incidents into insight.</span></div>
       </div>
       <div class="chead-right">
-        <button class="iconbtn" id="settingsBtn" title="Settings">⚙</button>
         <button class="avatarbtn" id="avatarBtn" title="Profile"><img src="logo-icon.png" alt="TM"></button>
       </div>
     </header>
@@ -138,6 +138,24 @@
     <button class="btn" id="setSaveBtn">Save</button>
   </div>
 </div>
+
+<!-- ============ PROFILE / ACTIVITY PANEL ============ -->
+<div class="act-scrim" id="actScrim"></div>
+<aside class="actpanel" id="actPanel">
+  <button class="act-close" id="actClose">✕</button>
+  <div class="act-profile">
+    <img src="logo-icon.png" alt="TraceMind">
+    <div class="act-name">TraceMind</div>
+    <div class="act-status"><span class="dot"></span>Connected</div>
+  </div>
+  <div class="act-tabs" id="actTabs">
+    <button data-f="all" class="active" title="All">☰</button>
+    <button data-f="fired" title="Fired">🚨</button>
+    <button data-f="resolved" title="Resolved">✓</button>
+  </div>
+  <div class="act-day">Today</div>
+  <div class="act-list" id="actList"></div>
+</aside>
 
 <script src="app.js"></script>
 </body>
