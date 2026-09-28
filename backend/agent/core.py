@@ -1,4 +1,4 @@
-"""RecallSRE agent core: the incident memory loop.
+"""TraceMind agent core: the incident memory loop.
 
     NEW INCIDENT
          ↓
