@@ -24,7 +24,7 @@ header {
   background: rgba(17,22,31,.9); position: sticky; top: 0; z-index: 10;
   flex-wrap: wrap;
 }
-.logo { font-size: 26px; }
+.logo { width: 44px; height: 44px; border-radius: 10px; flex: none; }
 h1 { font-size: 20px; letter-spacing: .5px; }
 h1 .accent { color: var(--purple); }
 .tagline { color: var(--muted); font-size: 13px; margin-top: 2px; }
