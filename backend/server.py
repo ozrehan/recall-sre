@@ -111,6 +111,24 @@ class State:
         mem, backend = build_memory()
         self.backend_name = backend
         self.memory = mem  # HybridMemoryStore: SQLite db of record + semantic
+        # Render's free disk is ephemeral — reseed SQLite from the bundled
+        # incidents.json whenever the database comes up empty (fresh deploy).
+        try:
+            if self.memory.db.count() == 0:
+                import json as _json
+                import os as _os
+                _seed_path = _os.path.join(
+                    _os.path.dirname(_os.path.abspath(__file__)),
+                    "data", "incidents.json",
+                )
+                with open(_seed_path) as _f:
+                    _incidents = _json.load(_f)
+                self.memory.seed(
+                    [dict(i, source="seed") for i in _incidents]
+                )
+                print(f"[memory] reseeded SQLite with {len(_incidents)} incidents")
+        except Exception as _e:
+            print(f"[memory] startup reseed failed ({_e})")
         self.agent = IncidentAgent(self.memory, llm=build_llm())
         db = self.memory.db
         self.github_repo = db.meta_get("github_repo") or GITHUB_REPO
