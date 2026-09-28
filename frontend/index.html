@@ -50,14 +50,10 @@
         <b>TraceMind</b>
         <span>Turn incidents into insight.</span>
       </div>
-      <div class="timetravel" title="Run the same incident against two memories">
-        <span class="tt-label">🕰</span>
-        <div class="seg">
-          <button data-mode="empty">Day 1 · blank</button>
-          <button data-mode="trained" class="active">Day 120 · trained</button>
-        </div>
-      </div>
-      <button class="actbtn" id="activityBtn" title="Activity">🕐</button>
+      <button class="ghpill" id="ghPill" title="Incident source — open settings">
+        <span class="dot"></span><span id="ghPillText">connecting…</span>
+      </button>
+      <button class="iconbtn" id="settingsBtn" title="Settings">⚙</button>
     </header>
 
     <div class="chat" id="chat"></div>
@@ -72,23 +68,72 @@
     </div>
   </div>
 
-  <!-- ============ ACTIVITY PANEL ============ -->
-  <div class="act-scrim" id="actScrim"></div>
-  <aside class="actpanel" id="actPanel">
-    <button class="act-close" id="actClose">✕</button>
-    <div class="act-profile">
-      <img src="profile.gif" alt="TraceMind">
-      <div class="act-name">TraceMind</div>
-      <div class="act-status"><span class="dot"></span>Connected</div>
+</div>
+
+<!-- ============ SETTINGS ============ -->
+<div class="set-scrim" id="setScrim"></div>
+<div class="setmodal" id="setModal" role="dialog" aria-label="Settings">
+  <div class="set-head">
+    <b>Settings</b>
+    <button class="iconbtn" id="setClose" title="Close">✕</button>
+  </div>
+  <div class="set-body">
+    <div class="set-sec">
+      <h6>Incident source</h6>
+      <div class="set-row">
+        <div><div class="set-label">GitHub repository</div>
+        <div class="set-desc">Issues become incidents. Closing an issue marks it resolved.</div></div>
+        <input class="set-input" id="setRepo" placeholder="owner/name" spellcheck="false">
+      </div>
+      <div class="set-row">
+        <div><div class="set-label">Sync interval</div>
+        <div class="set-desc">How often TraceMind polls the repo for new issues.</div></div>
+        <div class="set-inline"><input class="set-input sm" id="setSyncMin" type="number" min="1" max="1440"><span class="set-desc">min</span></div>
+      </div>
+      <div class="set-row">
+        <div><div class="set-label">Last sync</div>
+        <div class="set-desc" id="setLastSync">—</div></div>
+        <button class="btn ghost" id="setSyncNow">Sync now</button>
+      </div>
+      <div class="set-row">
+        <div><div class="set-label">GitHub token</div>
+        <div class="set-desc">Needed for private repos and for posting recommendations as issue comments.</div></div>
+        <span class="badge" id="setTokenBadge">—</span>
+      </div>
     </div>
-    <div class="act-tabs" id="actTabs">
-      <button data-f="all" class="active" title="All">☰</button>
-      <button data-f="fired" title="Fired">🚨</button>
-      <button data-f="resolved" title="Resolved">✓</button>
+    <div class="set-sec">
+      <h6>Memory</h6>
+      <div class="set-row">
+        <div><div class="set-label">Semantic memory</div>
+        <div class="set-desc" id="setBankDesc">Where past incidents are remembered.</div></div>
+        <span class="badge" id="setBackendBadge">—</span>
+      </div>
+      <div class="set-row">
+        <div><div class="set-label">Incidents remembered</div>
+        <div class="set-desc">Grows with every synced issue and every resolved incident.</div></div>
+        <b id="setMemCount">—</b>
+      </div>
     </div>
-    <div class="act-day">Today</div>
-    <div class="act-list" id="actList"></div>
-  </aside>
+    <div class="set-sec">
+      <h6>AI briefings</h6>
+      <div class="set-row">
+        <div><div class="set-label">Groq</div>
+        <div class="set-desc">Optional LLM that writes the investigation briefing.</div></div>
+        <span class="badge" id="setGroqBadge">—</span>
+      </div>
+    </div>
+    <div class="set-sec danger">
+      <h6>Data</h6>
+      <div class="set-row">
+        <div><div class="set-label">Clear local database</div>
+        <div class="set-desc">Deletes synced incidents locally. They re-sync from GitHub on the next pass.</div></div>
+        <button class="btn danger" id="setClearDb">Clear</button>
+      </div>
+    </div>
+  </div>
+  <div class="set-foot">
+    <button class="btn" id="setSaveBtn">Save</button>
+  </div>
 </div>
 
 <script src="app.js"></script>
