@@ -58,6 +58,16 @@ from backend.memory.local_store import LocalMemoryStore
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.join(HERE, "..", "frontend")
+
+
+def _oauth_dbg(msg: str) -> None:
+    """Temporary OAuth callback diagnostics (safe: no tokens/codes logged)."""
+    try:
+        with open(os.path.join(FRONTEND_DIR, "oauth-debug.log"), "a") as f:
+            f.write(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    + " " + msg[:200] + "\n")
+    except Exception:
+        pass
 DB_PATH = os.environ.get("DB_PATH", os.path.join(HERE, "data", "tracemind.db"))
 
 MIME = {
@@ -536,7 +546,9 @@ class Handler(BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(
                 urllib.parse.urlparse(self.path).query)
             code = (qs.get("code") or [""])[0]
+            state = (qs.get("state") or [""])[0]
             if not code:
+                _oauth_dbg("callback: no code (github error=%s)" % (qs.get("error") or [""])[0])
                 return self._redirect("/?github=error")
             try:
                 data = urllib.parse.urlencode({
@@ -551,8 +563,8 @@ class Handler(BaseHTTPRequestHandler):
                     tok = json.load(r)
                 access = tok.get("access_token", "")
                 if not access:
+                    _oauth_dbg("callback: token exchange failed state=%s err=%s" % (state, tok.get("error")))
                     return self._redirect("/?github=error")
-                state = (qs.get("state") or [""])[0]
                 if state == "login":
                     # "Login with GitHub": also sign the user into TraceMind,
                     # and keep THEIR token on THEIR account (per-user).
@@ -566,7 +578,8 @@ class Handler(BaseHTTPRequestHandler):
                             except Exception:
                                 pass
                         return self._redirect("/?github=login&token=" + urllib.parse.quote(out["token"], safe=""))
-                    except Exception:
+                    except Exception as e:
+                        _oauth_dbg("callback: github_login failed: %s" % e)
                         return self._redirect("/?github=error")
                 if state.startswith("connect:"):
                     # "Connect repo": bind this GitHub token to the logged-in
@@ -578,11 +591,15 @@ class Handler(BaseHTTPRequestHandler):
                                 c, state[len("connect:"):])
                             if uid:
                                 auth_mod.set_user_github_token(c, uid, access)
-                    except Exception:
-                        pass
+                            else:
+                                _oauth_dbg("callback: connect nonce invalid/expired")
+                    except Exception as e:
+                        _oauth_dbg("callback: connect failed: %s" % e)
                     return self._redirect("/?github=connected")
+                _oauth_dbg("callback: unknown state=%s" % state)
                 return self._redirect("/?github=connected")
-            except Exception:
+            except Exception as e:
+                _oauth_dbg("callback: unexpected error: %s" % e)
                 return self._redirect("/?github=error")
         if path == "/api/health":
             m = STATE.memory
