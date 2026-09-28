@@ -1,0 +1,1060 @@
+[
+  {
+    "id": "INC-0001",
+    "title": "notification-service cascading timeouts from Stripe API",
+    "service": "notification-service",
+    "severity": "high",
+    "started_at": "2026-06-04T00:21:00Z",
+    "resolved_at": "2026-06-04T01:00:00Z",
+    "error_signature": "Downstream Stripe API p99 > 10s causing thread-pool saturation",
+    "symptoms": [
+      "Stripe API latency p99: 800ms \u2192 12s",
+      "notification-service tomcat threads saturated: 200/200 busy",
+      "circuit breaker never tripped (threshold misconfigured at 50% over 10m)",
+      "user-facing checkout error rate 17%"
+    ],
+    "logs_snippet": "2026-06-04T00:21:00Z ERROR [http-nio-8080-exec-187] c.e.notification-service.StripeClient - Stripe call timed out after 10000ms\njava.util.concurrent.TimeoutException: Stripe charge API did not respond\n\tat c.e.notification-service.StripeClient.charge(StripeClient.java:64)\n2026-06-04T00:21:00Z WARN  [tomcat] All 200 threads busy for 45s; incoming requests queueing",
+    "deployment": {
+      "version": "v2.6.2",
+      "deployed_at": "2026-06-04T00:07:00Z"
+    },
+    "git_commit": "ad84e0a",
+    "root_cause": "Stripe API degradation (their status page confirmed elevated latency 10:15\u201311:40 UTC). Our client had no bulkhead isolation and a 10s timeout with 3 retries, so each slow call held a tomcat thread and retries amplified the load 3x.",
+    "investigation_steps": [
+      "Checked Stripe status page: confirmed incident on their side",
+      "Thread dump: 193/200 threads blocked in StripeClient.charge",
+      "Realized retries were multiplying the blast radius",
+      "Deployed breaker + degraded-mode config via feature flag (no full deploy needed)"
+    ],
+    "commands_used": [
+      "kubectl exec -it notification-service-0 -- jstack 1 | grep -c 'StripeClient.charge'",
+      "curl -s https://status.stripe.com/api/v2/summary.json | jq .",
+      "kubectl set env deployment/notification-service STRIPE_TIMEOUT_MS=2000 STRIPE_MAX_RETRIES=1"
+    ],
+    "fix": "Cut timeout to 2s, retries to 1 with jittered backoff, enabled circuit breaker (trip at 20% errors over 1m), and added graceful degradation: queue charges for async retry instead of failing checkout.",
+    "engineer": "Ananya Iyer",
+    "mttr_minutes": 39,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0002",
+    "title": "Kafka consumer lag spike in api-gateway",
+    "service": "api-gateway",
+    "severity": "high",
+    "started_at": "2026-06-07T19:04:00Z",
+    "resolved_at": "2026-06-07T20:12:00Z",
+    "error_signature": "Consumer group lag > 500k messages on topic user.activity",
+    "symptoms": [
+      "consumer lag 2k \u2192 540k messages in 25 minutes",
+      "downstream notifications delayed up to 40 minutes",
+      "consumer CPU fine, but rebalance storm: 11 rebalances in 10 min",
+      "one partition's leader on a broker with a failing disk"
+    ],
+    "logs_snippet": "2026-06-07T19:04:00Z WARN  [kafka-consumer-3] org.apache.kafka.clients.consumer - Rebalance started: group api-gateway-consumers, protocol cooperative\n2026-06-07T19:04:00Z ERROR [kafka-consumer-3] CommitFailedException: Offset commit failed \u2014 rebalance in progress\n2026-06-07T19:04:00Z WARN  [broker-2] Disk error on /var/kafka-logs: medium error, 3 bad sectors",
+    "deployment": {
+      "version": "v2.8.1",
+      "deployed_at": "2026-06-07T17:35:00Z"
+    },
+    "git_commit": "098d2f1",
+    "root_cause": "Broker-2's disk started failing, slowing its partitions 20x. The consumer group's cooperative rebalance kept reassigning those partitions, and each rebalance paused consumption \u2014 a feedback loop that grew lag exponentially.",
+    "investigation_steps": [
+      "Lag concentrated on partitions led by broker-2",
+      "Broker-2 dmesg showed disk medium errors",
+      "Rebalance storm explained why healthy partitions also lagged",
+      "Drained the bad broker; lag recovered in 18 minutes"
+    ],
+    "commands_used": [
+      "kafka-consumer-groups.sh --bootstrap-server kafka:9092 --group api-gateway-consumers --describe",
+      "dmesg | grep -i 'I/O error\\|medium error' | tail",
+      "kafka-reassign-partitions.sh --execute --reassignment-json-file drain-broker2.json",
+      "kubectl logs -l app=api-gateway --since=1h | grep -c 'Rebalance started'"
+    ],
+    "fix": "Drained broker-2 (kafka-reassign-partitions), replaced the disk, and set max.poll.interval.ms lower so slow consumers get fenced faster instead of triggering rebalances.",
+    "engineer": "Priya Sharma",
+    "mttr_minutes": 68,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0003",
+    "title": "api-gateway pods OOMKilled under load",
+    "service": "api-gateway",
+    "severity": "high",
+    "started_at": "2026-06-08T00:29:00Z",
+    "resolved_at": "2026-06-08T00:55:00Z",
+    "error_signature": "Kubernetes OOMKilled (exit 137) cascading across api-gateway pods",
+    "symptoms": [
+      "pods restarting in a loop: 14 restarts in 20 minutes",
+      "kubectl describe pod shows 'Last State: Terminated, Reason: OOMKilled, Exit Code: 137'",
+      "heap usage climbing 200MB/min with no plateau",
+      "GC pause time p99 hit 4.2s before each kill"
+    ],
+    "logs_snippet": "2026-06-08T00:29:00Z WARN  [k8s] pod/api-gateway-7d9f8c6b9-x4k2p OOMKilled (exit 137), restarting\n2026-06-08T00:29:00Z ERROR [http-nio-8080-exec-31] c.e.api-gateway.ReportService - request failed mid-stream\njava.lang.OutOfMemoryError: Java heap space\n\tat java.base/java.util.Arrays.copyOf(Arrays.java:3537)\n\tat c.e.api-gateway.ReportService.buildCsv(ReportService.java:201)",
+    "deployment": {
+      "version": "v2.7.0",
+      "deployed_at": "2026-06-07T23:53:00Z"
+    },
+    "git_commit": "3b36a45",
+    "root_cause": "Memory leak in CSV export path: buildCsv() materialized the full result set in memory instead of streaming. A large enterprise export (1886,235 rows) blew the 2Gi heap limit.",
+    "investigation_steps": [
+      "kubectl describe pod confirmed OOMKilled, not crashloop from bad image",
+      "Heap dump analyzed with MAT: 1.6GB retained by ArrayList in buildCsv",
+      "Found the offending commit: pagination removed 'for performance' in v2.7.0",
+      "Load-tested streaming fix with 2x largest export before rollout"
+    ],
+    "commands_used": [
+      "kubectl describe pod -l app=api-gateway | grep -A3 'Last State'",
+      "kubectl exec -it api-gateway-0 -- jmap -dump:format=b,file=/tmp/heap.hprof 1",
+      "kubectl set resources deployment/api-gateway --limits=memory=4Gi",
+      "git log --oneline -5 -- api-gateway/src/main/java/**/ReportService.java"
+    ],
+    "fix": "Raised memory limit 2Gi \u2192 4Gi as immediate relief, then rewrote the export to stream rows via cursor pagination; added heap-growth alert.",
+    "engineer": "Ananya Iyer",
+    "mttr_minutes": 26,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0004",
+    "title": "api-gateway DB connection pool exhaustion",
+    "service": "api-gateway",
+    "severity": "critical",
+    "started_at": "2026-06-18T07:08:00Z",
+    "resolved_at": "2026-06-18T07:14:00Z",
+    "error_signature": "HTTP 500 spike + 'remaining connection slots are reserved' in postgres logs",
+    "symptoms": [
+      "p99 latency jumped from 180ms to 8.2s",
+      "error rate 38% on /api/v1/api/charge",
+      "postgres logs: 'remaining connection slots are reserved for non-replication superuser connections'",
+      "application logs: HikariPool - Connection is not available, request timed out after 30000ms"
+    ],
+    "logs_snippet": "2026-06-18T07:08:00Z ERROR [HikariPool-1 housekeeper] com.zaxxer.hikari.pool.HikariPool - HikariPool-1 - Connection is not available, request timed out after 30000ms.\n2026-06-18T07:08:00Z ERROR [http-nio-8080-exec-214] c.e.api-gateway.PaymentController - charge failed: org.postgresql.util.PSQLException: FATAL: remaining connection slots are reserved for non-replication superuser connections\n2026-06-18T07:08:00Z WARN  [HikariPool-1 housekeeper] com.zaxxer.hikari.pool.HikariPool - HikariPool-1 - Thread starvation or clock leap detected (housekeeper delta=42s).",
+    "deployment": {
+      "version": "v2.8.1",
+      "deployed_at": "2026-06-18T06:43:00Z"
+    },
+    "git_commit": "31f003d",
+    "root_cause": "Database connection pool exhaustion: pool maxed at 100 connections after v2.8.1 increased per-request query fan-out; connections leaked on timeout paths and were never returned.",
+    "investigation_steps": [
+      "Checked Grafana: pg_stat_activity showed 100/100 connections in 'idle in transaction'",
+      "Correlated spike start with deployment v2.8.1 18 minutes earlier",
+      "Confirmed leak via heap dump: 4,100 abandoned PgConnection objects",
+      "Verified fix on staging with 2x load test before prod rollout"
+    ],
+    "commands_used": [
+      "kubectl logs -l app=api-gateway --since=30m | grep -i 'connection is not available' | head -20",
+      "kubectl exec -it postgres-0 -- psql -c \"select count(*), state from pg_stat_activity group by state;\"",
+      "kubectl rollout history deployment/api-gateway",
+      "kubectl set env deployment/api-gateway SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=300"
+    ],
+    "fix": "Increased HikariCP maximumPoolSize from 100 to 300, added leakDetectionThreshold=60s, and rolled back v2.8.1 until the N+1 query regression was patched.",
+    "engineer": "Priya Sharma",
+    "mttr_minutes": 6,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0005",
+    "title": "TLS certificate expired for api-gateway",
+    "service": "api-gateway",
+    "severity": "critical",
+    "started_at": "2026-06-18T20:10:00Z",
+    "resolved_at": "2026-06-18T20:47:00Z",
+    "error_signature": "SSLHandshakeException: certificate expired; clients rejecting connections",
+    "symptoms": [
+      "mobile clients failing with CERTIFICATE_VERIFY_FAILED",
+      "curl: (60) SSL certificate problem: certificate has expired",
+      "cert-manager Certificate resource stuck in 'Not Ready'",
+      "ACME challenge failing: ingress annotation removed in v3.0.0"
+    ],
+    "logs_snippet": "2026-06-18T20:10:00Z ERROR [http-nio-8443-exec-3] TLS handshake failed: certificate expired\njavax.net.ssl.SSLHandshakeException: PKIX path validation failed: java.security.cert.CertificateExpiredException: NotAfter: 2026-06-17T20:10:00Z\n2026-06-18T20:10:00Z WARN  [cert-manager] Certificate api-gateway-tls not ready: challenge solver misconfigured",
+    "deployment": {
+      "version": "v3.0.0",
+      "deployed_at": "2026-06-18T18:55:00Z"
+    },
+    "git_commit": "e63f810",
+    "root_cause": "TLS certificate expired at 2026-06-17T20:10:00Z. Auto-renewal broke because v3.0.0 removed the cert-manager ingress annotation, so the ACME HTTP-01 challenge could never complete. The 30-day expiry warning alert was routed to a dead Slack channel.",
+    "investigation_steps": [
+      "openssl s_client showed NotAfter in the past \u2014 expiry confirmed in 30s",
+      "cert-manager described: challenge pending, solver misconfigured",
+      "git blame: annotation removed 41 days ago in v3.0.0 ('cleanup')",
+      "Found the dead alert route \u2014 nobody saw the 30/7/1-day warnings"
+    ],
+    "commands_used": [
+      "echo | openssl s_client -connect api-gateway.example.com:443 2>/dev/null | openssl x509 -noout -dates",
+      "kubectl describe certificate api-gateway-tls -n prod",
+      "kubectl annotate ingress api-gateway cert-manager.io/cluster-issuer=letsencrypt-prod --overwrite",
+      "kubectl cert-manager renew api-gateway-tls -n prod"
+    ],
+    "fix": "Manually issued certificate via cert-manager (restored annotation), forced renewal, and re-routed expiry alerts to the active #sre-alerts channel with a 14-day warning.",
+    "engineer": "David Kim",
+    "mttr_minutes": 37,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0006",
+    "title": "notification-service cascading timeouts from SendGrid API",
+    "service": "notification-service",
+    "severity": "high",
+    "started_at": "2026-06-19T11:22:00Z",
+    "resolved_at": "2026-06-19T11:43:00Z",
+    "error_signature": "Downstream SendGrid API p99 > 10s causing thread-pool saturation",
+    "symptoms": [
+      "SendGrid API latency p99: 800ms \u2192 12s",
+      "notification-service tomcat threads saturated: 200/200 busy",
+      "circuit breaker never tripped (threshold misconfigured at 50% over 10m)",
+      "user-facing checkout error rate 17%"
+    ],
+    "logs_snippet": "2026-06-19T11:22:00Z ERROR [http-nio-8080-exec-187] c.e.notification-service.SendGridClient - SendGrid call timed out after 10000ms\njava.util.concurrent.TimeoutException: SendGrid charge API did not respond\n\tat c.e.notification-service.SendGridClient.charge(SendGridClient.java:64)\n2026-06-19T11:22:00Z WARN  [tomcat] All 200 threads busy for 45s; incoming requests queueing",
+    "deployment": {
+      "version": "v2.4.0",
+      "deployed_at": "2026-06-19T10:43:00Z"
+    },
+    "git_commit": "acfdd67",
+    "root_cause": "SendGrid API degradation (their status page confirmed elevated latency 10:15\u201311:40 UTC). Our client had no bulkhead isolation and a 10s timeout with 3 retries, so each slow call held a tomcat thread and retries amplified the load 3x.",
+    "investigation_steps": [
+      "Checked SendGrid status page: confirmed incident on their side",
+      "Thread dump: 193/200 threads blocked in SendGridClient.charge",
+      "Realized retries were multiplying the blast radius",
+      "Deployed breaker + degraded-mode config via feature flag (no full deploy needed)"
+    ],
+    "commands_used": [
+      "kubectl exec -it notification-service-0 -- jstack 1 | grep -c 'SendGridClient.charge'",
+      "curl -s https://status.sendgrid.com/api/v2/summary.json | jq .",
+      "kubectl set env deployment/notification-service SENDGRID_TIMEOUT_MS=2000 SENDGRID_MAX_RETRIES=1"
+    ],
+    "fix": "Cut timeout to 2s, retries to 1 with jittered backoff, enabled circuit breaker (trip at 20% errors over 1m), and added graceful degradation: queue charges for async retry instead of failing checkout.",
+    "engineer": "Arjun Mehta",
+    "mttr_minutes": 21,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0007",
+    "title": "auth-service cascading timeouts from Stripe API",
+    "service": "auth-service",
+    "severity": "high",
+    "started_at": "2026-06-30T02:28:00Z",
+    "resolved_at": "2026-06-30T03:08:00Z",
+    "error_signature": "Downstream Stripe API p99 > 10s causing thread-pool saturation",
+    "symptoms": [
+      "Stripe API latency p99: 800ms \u2192 12s",
+      "auth-service tomcat threads saturated: 200/200 busy",
+      "circuit breaker never tripped (threshold misconfigured at 50% over 10m)",
+      "user-facing checkout error rate 17%"
+    ],
+    "logs_snippet": "2026-06-30T02:28:00Z ERROR [http-nio-8080-exec-187] c.e.auth-service.StripeClient - Stripe call timed out after 10000ms\njava.util.concurrent.TimeoutException: Stripe charge API did not respond\n\tat c.e.auth-service.StripeClient.charge(StripeClient.java:64)\n2026-06-30T02:28:00Z WARN  [tomcat] All 200 threads busy for 45s; incoming requests queueing",
+    "deployment": {
+      "version": "v3.0.0",
+      "deployed_at": "2026-06-30T02:02:00Z"
+    },
+    "git_commit": "bc13822",
+    "root_cause": "Stripe API degradation (their status page confirmed elevated latency 10:15\u201311:40 UTC). Our client had no bulkhead isolation and a 10s timeout with 3 retries, so each slow call held a tomcat thread and retries amplified the load 3x.",
+    "investigation_steps": [
+      "Checked Stripe status page: confirmed incident on their side",
+      "Thread dump: 193/200 threads blocked in StripeClient.charge",
+      "Realized retries were multiplying the blast radius",
+      "Deployed breaker + degraded-mode config via feature flag (no full deploy needed)"
+    ],
+    "commands_used": [
+      "kubectl exec -it auth-service-0 -- jstack 1 | grep -c 'StripeClient.charge'",
+      "curl -s https://status.stripe.com/api/v2/summary.json | jq .",
+      "kubectl set env deployment/auth-service STRIPE_TIMEOUT_MS=2000 STRIPE_MAX_RETRIES=1"
+    ],
+    "fix": "Cut timeout to 2s, retries to 1 with jittered backoff, enabled circuit breaker (trip at 20% errors over 1m), and added graceful degradation: queue charges for async retry instead of failing checkout.",
+    "engineer": "Priya Sharma",
+    "mttr_minutes": 40,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0008",
+    "title": "search-service DB connection pool exhaustion",
+    "service": "search-service",
+    "severity": "critical",
+    "started_at": "2026-06-30T03:44:00Z",
+    "resolved_at": "2026-06-30T03:53:00Z",
+    "error_signature": "HTTP 500 spike + 'remaining connection slots are reserved' in postgres logs",
+    "symptoms": [
+      "p99 latency jumped from 180ms to 8.2s",
+      "error rate 38% on /api/v1/search/charge",
+      "postgres logs: 'remaining connection slots are reserved for non-replication superuser connections'",
+      "application logs: HikariPool - Connection is not available, request timed out after 30000ms"
+    ],
+    "logs_snippet": "2026-06-30T03:44:00Z ERROR [HikariPool-1 housekeeper] com.zaxxer.hikari.pool.HikariPool - HikariPool-1 - Connection is not available, request timed out after 30000ms.\n2026-06-30T03:44:00Z ERROR [http-nio-8080-exec-214] c.e.search-service.PaymentController - charge failed: org.postgresql.util.PSQLException: FATAL: remaining connection slots are reserved for non-replication superuser connections\n2026-06-30T03:44:00Z WARN  [HikariPool-1 housekeeper] com.zaxxer.hikari.pool.HikariPool - HikariPool-1 - Thread starvation or clock leap detected (housekeeper delta=42s).",
+    "deployment": {
+      "version": "v2.4.0",
+      "deployed_at": "2026-06-30T02:15:00Z"
+    },
+    "git_commit": "e9e6f39",
+    "root_cause": "Database connection pool exhaustion: pool maxed at 50 connections after v2.4.0 increased per-request query fan-out; connections leaked on timeout paths and were never returned.",
+    "investigation_steps": [
+      "Checked Grafana: pg_stat_activity showed 50/50 connections in 'idle in transaction'",
+      "Correlated spike start with deployment v2.4.0 18 minutes earlier",
+      "Confirmed leak via heap dump: 4,100 abandoned PgConnection objects",
+      "Verified fix on staging with 2x load test before prod rollout"
+    ],
+    "commands_used": [
+      "kubectl logs -l app=search-service --since=30m | grep -i 'connection is not available' | head -20",
+      "kubectl exec -it postgres-0 -- psql -c \"select count(*), state from pg_stat_activity group by state;\"",
+      "kubectl rollout history deployment/search-service",
+      "kubectl set env deployment/search-service SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=500"
+    ],
+    "fix": "Increased HikariCP maximumPoolSize from 50 to 500, added leakDetectionThreshold=60s, and rolled back v2.4.0 until the N+1 query regression was patched.",
+    "engineer": "Arjun Mehta",
+    "mttr_minutes": 9,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0009",
+    "title": "Redis connection leak in inventory-service",
+    "service": "inventory-service",
+    "severity": "high",
+    "started_at": "2026-07-05T13:44:00Z",
+    "resolved_at": "2026-07-05T14:19:00Z",
+    "error_signature": "redis.clients.jedis.exceptions.JedisConnectionException: Could not get a resource from the pool",
+    "symptoms": [
+      "cache hit rate collapsed 96% \u2192 11%",
+      "p95 latency 240ms \u2192 3.1s as traffic fell through to DB",
+      "Jedis pool exhausted: 500/500 connections borrowed, 0 idle",
+      "DB CPU spiked to 92% from cache-miss thundering herd"
+    ],
+    "logs_snippet": "2026-07-05T13:44:00Z ERROR [lettuce-nioEventLoop-4-7] c.e.inventory-service.CacheService - cache get failed\nredis.clients.jedis.exceptions.JedisConnectionException: Could not get a resource from the pool\n\tat redis.clients.jedis.util.Pool.getResource(Pool.java:59)\nCaused by: java.util.NoSuchElementException: Timeout waiting for idle object\n2026-07-05T13:44:00Z WARN  [HikariPool-1] connection borrow wait exceeded 5s (cache fallback path)",
+    "deployment": {
+      "version": "v3.1.2",
+      "deployed_at": "2026-07-05T12:25:00Z"
+    },
+    "git_commit": "3606f4c",
+    "root_cause": "Redis connection leak: the async cache-write path borrowed Jedis connections without try-with-resources; under retry storms connections were never returned and the 500-connection pool drained over ~40 minutes.",
+    "investigation_steps": [
+      "Grafana: jedis_pool_active climbing monotonically since 09:10, never dropping",
+      "Heap dump: 500 Jedis objects retained by CompletableFuture callbacks",
+      "Code search found 3 borrow sites missing close(); 1 in retry path",
+      "Decided restart-then-patch to stop the bleeding immediately"
+    ],
+    "commands_used": [
+      "redis-cli -h inventory-service-redis info clients | grep connected_clients",
+      "kubectl top pods -l app=inventory-service",
+      "kubectl rollout restart deployment/inventory-service",
+      "grep -rn 'getResource()' inventory-service/src/main/java --include=*.java"
+    ],
+    "fix": "Restarted inventory-service pods to reclaim connections, then shipped a patch wrapping all Jedis borrows in try-with-resources and added pool-exhaustion alerting at 80%.",
+    "engineer": "Emily Zhang",
+    "mttr_minutes": 35,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0010",
+    "title": "Disk pressure: user-service log volume full",
+    "service": "user-service",
+    "severity": "medium",
+    "started_at": "2026-07-07T21:06:00Z",
+    "resolved_at": "2026-07-07T21:20:00Z",
+    "error_signature": "No space left on device writing to /var/log/user-service",
+    "symptoms": [
+      "pods evicted with 'DiskPressure'",
+      "application failing to write logs: IOException: No space left on device",
+      "log volume at 100%: 48GB of uncompressed JSON logs",
+      "log rotation cron had been failing silently for 6 days"
+    ],
+    "logs_snippet": "2026-07-07T21:06:00Z ERROR [logback] Failed to write log event: java.io.IOException: No space left on device\n\tat java.base/java.io.FileOutputStream.writeBytes(Native Method)\n2026-07-07T21:06:00Z WARN  [k8s] Node node-7f3a DiskPressure: node filesystem usage 96%\n2026-07-07T21:06:00Z INFO  [cron] logrotate: last successful run 6 days ago (exit 1, permission denied)",
+    "deployment": {
+      "version": "v2.5.0",
+      "deployed_at": "2026-07-07T19:44:00Z"
+    },
+    "git_commit": "784fc8a",
+    "root_cause": "Log rotation broke 6 days ago when the logrotate config's postrotate script lost execute permission in v2.5.0. Uncompressed JSON logs (debug level left on from a prior incident) filled the 50GB volume.",
+    "investigation_steps": [
+      "df -h showed /var/log at 100%",
+      "Found logrotate failing: postrotate permission denied since v2.5.0",
+      "Noticed DEBUG level still on \u2014 leftover from last week's incident",
+      "Cleared + fixed rotation + alert, in that order"
+    ],
+    "commands_used": [
+      "df -h /var/log && du -sh /var/log/user-service/* | sort -rh | head",
+      "grep -i 'error' /var/log/cron | tail -5",
+      "chmod +x /etc/logrotate.d/user-service-postrotate.sh",
+      "kubectl set env deployment/user-service LOG_LEVEL=INFO"
+    ],
+    "fix": "Cleared oldest logs manually, fixed logrotate permissions, dropped log level back to INFO, and added a disk-usage alert at 75%.",
+    "engineer": "David Kim",
+    "mttr_minutes": 14,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0011",
+    "title": "notification-service pods OOMKilled under load",
+    "service": "notification-service",
+    "severity": "high",
+    "started_at": "2026-07-11T00:07:00Z",
+    "resolved_at": "2026-07-11T00:43:00Z",
+    "error_signature": "Kubernetes OOMKilled (exit 137) cascading across notification-service pods",
+    "symptoms": [
+      "pods restarting in a loop: 14 restarts in 20 minutes",
+      "kubectl describe pod shows 'Last State: Terminated, Reason: OOMKilled, Exit Code: 137'",
+      "heap usage climbing 200MB/min with no plateau",
+      "GC pause time p99 hit 4.2s before each kill"
+    ],
+    "logs_snippet": "2026-07-11T00:07:00Z WARN  [k8s] pod/notification-service-7d9f8c6b9-x4k2p OOMKilled (exit 137), restarting\n2026-07-11T00:07:00Z ERROR [http-nio-8080-exec-31] c.e.notification-service.ReportService - request failed mid-stream\njava.lang.OutOfMemoryError: Java heap space\n\tat java.base/java.util.Arrays.copyOf(Arrays.java:3537)\n\tat c.e.notification-service.ReportService.buildCsv(ReportService.java:201)",
+    "deployment": {
+      "version": "v2.6.2",
+      "deployed_at": "2026-07-10T23:07:00Z"
+    },
+    "git_commit": "641c58a",
+    "root_cause": "Memory leak in CSV export path: buildCsv() materialized the full result set in memory instead of streaming. A large enterprise export (1244,710 rows) blew the 2Gi heap limit.",
+    "investigation_steps": [
+      "kubectl describe pod confirmed OOMKilled, not crashloop from bad image",
+      "Heap dump analyzed with MAT: 1.6GB retained by ArrayList in buildCsv",
+      "Found the offending commit: pagination removed 'for performance' in v2.6.2",
+      "Load-tested streaming fix with 2x largest export before rollout"
+    ],
+    "commands_used": [
+      "kubectl describe pod -l app=notification-service | grep -A3 'Last State'",
+      "kubectl exec -it notification-service-0 -- jmap -dump:format=b,file=/tmp/heap.hprof 1",
+      "kubectl set resources deployment/notification-service --limits=memory=4Gi",
+      "git log --oneline -5 -- notification-service/src/main/java/**/ReportService.java"
+    ],
+    "fix": "Raised memory limit 2Gi \u2192 4Gi as immediate relief, then rewrote the export to stream rows via cursor pagination; added heap-growth alert.",
+    "engineer": "Priya Sharma",
+    "mttr_minutes": 36,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0012",
+    "title": "Feature flag misconfiguration broke billing-service checkout",
+    "service": "billing-service",
+    "severity": "high",
+    "started_at": "2026-07-11T02:52:00Z",
+    "resolved_at": "2026-07-11T02:59:00Z",
+    "error_signature": "100% of checkout requests failing after flag checkout-v2-pricing rollout",
+    "symptoms": [
+      "checkout success rate 99.1% \u2192 0% at exactly 14:00 UTC",
+      "flag checkout-v2-pricing rolled to 100% at 14:00 UTC via LaunchDarkly",
+      "code path behind flag calls v2 pricing API that isn't deployed yet",
+      "no errors in canary because flag was off for canary cohort"
+    ],
+    "logs_snippet": "2026-07-11T02:52:00Z ERROR [http-nio-8080-exec-55] c.e.billing-service.CheckoutService - pricing call failed\nc.e.billing-service.PricingV2Exception: endpoint /v2/price not found (404)\n\tat c.e.billing-service.CheckoutService.priceWithV2(CheckoutService.java:117)\n2026-07-11T02:52:00Z INFO  [launchdarkly] flag checkout-v2-pricing evaluated true for 100% of contexts",
+    "deployment": {
+      "version": "v2.6.2",
+      "deployed_at": "2026-07-11T01:49:00Z"
+    },
+    "git_commit": "8cfba4a",
+    "root_cause": "Feature flag checkout-v2-pricing was rolled to 100% before the v2 pricing service it depends on was deployed. The flag and the service had separate rollout plans owned by different engineers, and the dependency wasn't encoded anywhere.",
+    "investigation_steps": [
+      "Failure started at exactly 14:00 \u2014 checked what changed at 14:00",
+      "LaunchDarkly audit log: flag checkout-v2-pricing \u2192 100% at 13:59:48",
+      "Code read: flag-true path calls /v2/price which doesn't exist yet",
+      "Kill-switch first; process fix second"
+    ],
+    "commands_used": [
+      "ldcli flags update checkout-v2-pricing --rollout 0  # kill switch",
+      "kubectl get deployments -l app=pricing-v2  # not found \u2014 confirms dependency missing",
+      "git log --oneline --grep='checkout-v2-pricing' -5"
+    ],
+    "fix": "Killed the flag (instant rollback to v1 path, recovery in 90 seconds), then added a deployment-dependency check to the flag rollout runbook.",
+    "engineer": "Emily Zhang",
+    "mttr_minutes": 7,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0013",
+    "title": "Kafka consumer lag spike in order-service",
+    "service": "order-service",
+    "severity": "high",
+    "started_at": "2026-07-17T10:13:00Z",
+    "resolved_at": "2026-07-17T11:07:00Z",
+    "error_signature": "Consumer group lag > 500k messages on topic user.activity",
+    "symptoms": [
+      "consumer lag 2k \u2192 540k messages in 25 minutes",
+      "downstream notifications delayed up to 40 minutes",
+      "consumer CPU fine, but rebalance storm: 11 rebalances in 10 min",
+      "one partition's leader on a broker with a failing disk"
+    ],
+    "logs_snippet": "2026-07-17T10:13:00Z WARN  [kafka-consumer-3] org.apache.kafka.clients.consumer - Rebalance started: group order-service-consumers, protocol cooperative\n2026-07-17T10:13:00Z ERROR [kafka-consumer-3] CommitFailedException: Offset commit failed \u2014 rebalance in progress\n2026-07-17T10:13:00Z WARN  [broker-2] Disk error on /var/kafka-logs: medium error, 3 bad sectors",
+    "deployment": {
+      "version": "v2.4.0",
+      "deployed_at": "2026-07-17T10:06:00Z"
+    },
+    "git_commit": "e9a16d2",
+    "root_cause": "Broker-2's disk started failing, slowing its partitions 20x. The consumer group's cooperative rebalance kept reassigning those partitions, and each rebalance paused consumption \u2014 a feedback loop that grew lag exponentially.",
+    "investigation_steps": [
+      "Lag concentrated on partitions led by broker-2",
+      "Broker-2 dmesg showed disk medium errors",
+      "Rebalance storm explained why healthy partitions also lagged",
+      "Drained the bad broker; lag recovered in 18 minutes"
+    ],
+    "commands_used": [
+      "kafka-consumer-groups.sh --bootstrap-server kafka:9092 --group order-service-consumers --describe",
+      "dmesg | grep -i 'I/O error\\|medium error' | tail",
+      "kafka-reassign-partitions.sh --execute --reassignment-json-file drain-broker2.json",
+      "kubectl logs -l app=order-service --since=1h | grep -c 'Rebalance started'"
+    ],
+    "fix": "Drained broker-2 (kafka-reassign-partitions), replaced the disk, and set max.poll.interval.ms lower so slow consumers get fenced faster instead of triggering rebalances.",
+    "engineer": "Meera Nair",
+    "mttr_minutes": 54,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0014",
+    "title": "Regression after v2.7.0 deploy on search-service",
+    "service": "search-service",
+    "severity": "critical",
+    "started_at": "2026-07-21T10:34:00Z",
+    "resolved_at": "2026-07-21T10:47:00Z",
+    "error_signature": "HTTP 500 spike starting within minutes of deployment v2.7.0",
+    "symptoms": [
+      "error rate 0.2% \u2192 24% within 4 minutes of deploy",
+      "new exception type in logs: NullPointerException in TokenService",
+      "canary analysis flagged but auto-promotion was disabled",
+      "only pods running v2.7.0 affected; old revision healthy"
+    ],
+    "logs_snippet": "2026-07-21T10:34:00Z ERROR [http-nio-8080-exec-96] c.e.search-service.TokenService - Unhandled exception processing request\njava.lang.NullPointerException: Cannot invoke \"String.length()\" because \"token\" is null\n\tat c.e.search-service.TokenService.validate(TokenService.java:142)\n\tat c.e.search-service.TokenService.handle(TokenService.java:88)\n2026-07-21T10:34:00Z INFO  [k8s] deployment/search-service scaled UP replica set search-service-v2.7.0 to 12",
+    "deployment": {
+      "version": "v2.7.0",
+      "deployed_at": "2026-07-21T09:28:00Z"
+    },
+    "git_commit": "5e12623",
+    "root_cause": "Deployment v2.7.0 shipped a regression: TokenService.validate() dereferences a nullable auth token. The null case was introduced when the token-refresh flow was refactored in commit 5e12623.",
+    "investigation_steps": [
+      "Noticed error spike aligned exactly with deploy timestamp in ArgoCD",
+      "Diffed v2.7.0 vs previous: 14 files changed, token-refresh refactor stood out",
+      "Reproduced NPE locally with missing-token request fixture",
+      "Rolled back first, root-caused second (incident protocol)"
+    ],
+    "commands_used": [
+      "kubectl rollout history deployment/search-service",
+      "kubectl rollout undo deployment/search-service --to-revision=14",
+      "git log --oneline vv2.7.0..vv2.7.1 -- search-service/",
+      "kubectl rollout status deployment/search-service --watch"
+    ],
+    "fix": "Immediate rollback to previous revision via kubectl rollout undo; followed by a hotfix adding null-guard + regression test, redeployed as v2.7.1.",
+    "engineer": "Sarah Chen",
+    "mttr_minutes": 13,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0015",
+    "title": "Disk pressure: user-service log volume full",
+    "service": "user-service",
+    "severity": "medium",
+    "started_at": "2026-07-24T05:46:00Z",
+    "resolved_at": "2026-07-24T06:12:00Z",
+    "error_signature": "No space left on device writing to /var/log/user-service",
+    "symptoms": [
+      "pods evicted with 'DiskPressure'",
+      "application failing to write logs: IOException: No space left on device",
+      "log volume at 100%: 48GB of uncompressed JSON logs",
+      "log rotation cron had been failing silently for 6 days"
+    ],
+    "logs_snippet": "2026-07-24T05:46:00Z ERROR [logback] Failed to write log event: java.io.IOException: No space left on device\n\tat java.base/java.io.FileOutputStream.writeBytes(Native Method)\n2026-07-24T05:46:00Z WARN  [k8s] Node node-7f3a DiskPressure: node filesystem usage 96%\n2026-07-24T05:46:00Z INFO  [cron] logrotate: last successful run 6 days ago (exit 1, permission denied)",
+    "deployment": {
+      "version": "v2.8.1",
+      "deployed_at": "2026-07-24T05:30:00Z"
+    },
+    "git_commit": "06765e7",
+    "root_cause": "Log rotation broke 6 days ago when the logrotate config's postrotate script lost execute permission in v2.8.1. Uncompressed JSON logs (debug level left on from a prior incident) filled the 50GB volume.",
+    "investigation_steps": [
+      "df -h showed /var/log at 100%",
+      "Found logrotate failing: postrotate permission denied since v2.8.1",
+      "Noticed DEBUG level still on \u2014 leftover from last week's incident",
+      "Cleared + fixed rotation + alert, in that order"
+    ],
+    "commands_used": [
+      "df -h /var/log && du -sh /var/log/user-service/* | sort -rh | head",
+      "grep -i 'error' /var/log/cron | tail -5",
+      "chmod +x /etc/logrotate.d/user-service-postrotate.sh",
+      "kubectl set env deployment/user-service LOG_LEVEL=INFO"
+    ],
+    "fix": "Cleared oldest logs manually, fixed logrotate permissions, dropped log level back to INFO, and added a disk-usage alert at 75%.",
+    "engineer": "Arjun Mehta",
+    "mttr_minutes": 26,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0016",
+    "title": "Redis connection leak in payment-service",
+    "service": "payment-service",
+    "severity": "high",
+    "started_at": "2026-07-31T07:17:00Z",
+    "resolved_at": "2026-07-31T07:42:00Z",
+    "error_signature": "redis.clients.jedis.exceptions.JedisConnectionException: Could not get a resource from the pool",
+    "symptoms": [
+      "cache hit rate collapsed 96% \u2192 11%",
+      "p95 latency 240ms \u2192 3.1s as traffic fell through to DB",
+      "Jedis pool exhausted: 500/500 connections borrowed, 0 idle",
+      "DB CPU spiked to 92% from cache-miss thundering herd"
+    ],
+    "logs_snippet": "2026-07-31T07:17:00Z ERROR [lettuce-nioEventLoop-4-7] c.e.payment-service.CacheService - cache get failed\nredis.clients.jedis.exceptions.JedisConnectionException: Could not get a resource from the pool\n\tat redis.clients.jedis.util.Pool.getResource(Pool.java:59)\nCaused by: java.util.NoSuchElementException: Timeout waiting for idle object\n2026-07-31T07:17:00Z WARN  [HikariPool-1] connection borrow wait exceeded 5s (cache fallback path)",
+    "deployment": {
+      "version": "v2.7.0",
+      "deployed_at": "2026-07-31T06:13:00Z"
+    },
+    "git_commit": "cdf6b89",
+    "root_cause": "Redis connection leak: the async cache-write path borrowed Jedis connections without try-with-resources; under retry storms connections were never returned and the 500-connection pool drained over ~40 minutes.",
+    "investigation_steps": [
+      "Grafana: jedis_pool_active climbing monotonically since 09:10, never dropping",
+      "Heap dump: 500 Jedis objects retained by CompletableFuture callbacks",
+      "Code search found 3 borrow sites missing close(); 1 in retry path",
+      "Decided restart-then-patch to stop the bleeding immediately"
+    ],
+    "commands_used": [
+      "redis-cli -h payment-service-redis info clients | grep connected_clients",
+      "kubectl top pods -l app=payment-service",
+      "kubectl rollout restart deployment/payment-service",
+      "grep -rn 'getResource()' payment-service/src/main/java --include=*.java"
+    ],
+    "fix": "Restarted payment-service pods to reclaim connections, then shipped a patch wrapping all Jedis borrows in try-with-resources and added pool-exhaustion alerting at 80%.",
+    "engineer": "Ananya Iyer",
+    "mttr_minutes": 25,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0017",
+    "title": "Regression after v2.7.0 deploy on api-gateway",
+    "service": "api-gateway",
+    "severity": "critical",
+    "started_at": "2026-08-13T17:14:00Z",
+    "resolved_at": "2026-08-13T17:29:00Z",
+    "error_signature": "HTTP 500 spike starting within minutes of deployment v2.7.0",
+    "symptoms": [
+      "error rate 0.2% \u2192 24% within 4 minutes of deploy",
+      "new exception type in logs: NullPointerException in PaymentValidator",
+      "canary analysis flagged but auto-promotion was disabled",
+      "only pods running v2.7.0 affected; old revision healthy"
+    ],
+    "logs_snippet": "2026-08-13T17:14:00Z ERROR [http-nio-8080-exec-96] c.e.api-gateway.PaymentValidator - Unhandled exception processing request\njava.lang.NullPointerException: Cannot invoke \"String.length()\" because \"token\" is null\n\tat c.e.api-gateway.PaymentValidator.validate(PaymentValidator.java:142)\n\tat c.e.api-gateway.PaymentValidator.handle(PaymentValidator.java:88)\n2026-08-13T17:14:00Z INFO  [k8s] deployment/api-gateway scaled UP replica set api-gateway-v2.7.0 to 12",
+    "deployment": {
+      "version": "v2.7.0",
+      "deployed_at": "2026-08-13T17:05:00Z"
+    },
+    "git_commit": "6a5e731",
+    "root_cause": "Deployment v2.7.0 shipped a regression: PaymentValidator.validate() dereferences a nullable auth token. The null case was introduced when the token-refresh flow was refactored in commit 6a5e731.",
+    "investigation_steps": [
+      "Noticed error spike aligned exactly with deploy timestamp in ArgoCD",
+      "Diffed v2.7.0 vs previous: 14 files changed, token-refresh refactor stood out",
+      "Reproduced NPE locally with missing-token request fixture",
+      "Rolled back first, root-caused second (incident protocol)"
+    ],
+    "commands_used": [
+      "kubectl rollout history deployment/api-gateway",
+      "kubectl rollout undo deployment/api-gateway --to-revision=8",
+      "git log --oneline vv2.7.0..vv2.7.1 -- api-gateway/",
+      "kubectl rollout status deployment/api-gateway --watch"
+    ],
+    "fix": "Immediate rollback to previous revision via kubectl rollout undo; followed by a hotfix adding null-guard + regression test, redeployed as v2.7.1.",
+    "engineer": "Sarah Chen",
+    "mttr_minutes": 15,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0018",
+    "title": "DNS resolution failures in search-service",
+    "service": "search-service",
+    "severity": "critical",
+    "started_at": "2026-08-15T08:51:00Z",
+    "resolved_at": "2026-08-15T09:00:00Z",
+    "error_signature": "java.net.UnknownHostException for internal service hostnames",
+    "symptoms": [
+      "inter-service calls failing: UnknownHostException: inventory-service-service",
+      "kube-dns CPU throttled at 100% (limit too low)",
+      "only services in eu-west-1b affected; 1a and 1c healthy",
+      "external DNS (google.com) still resolving \u2014 internal only"
+    ],
+    "logs_snippet": "2026-08-15T08:51:00Z ERROR [http-nio-8080-exec-12] c.e.search-service.OrderClient - call failed\njava.net.UnknownHostException: inventory-service-service: Name or service not known\n\tat java.base/java.net.Inet6AddressImpl.lookupAllHostAddr(Native Method)\n2026-08-15T08:51:00Z WARN  [kube-dns] CPU throttling: 100% of 500m limit, query queue backing up",
+    "deployment": {
+      "version": "v2.5.0",
+      "deployed_at": "2026-08-15T07:33:00Z"
+    },
+    "git_commit": "b52f511",
+    "root_cause": "kube-dns autoscaler misconfigured after cluster upgrade: it scaled on node count, not query rate. A traffic spike 3x'd DNS queries in eu-west-1b and the 2 CoreDNS replicas CPU-throttled, dropping internal resolutions.",
+    "investigation_steps": [
+      "External DNS worked, internal didn't \u2192 pointed at kube-dns, not the app",
+      "kubectl top pods -n kube-system showed coredns at 100% CPU (throttled)",
+      "Checked autoscaler config: still using default node-based formula post-upgrade",
+      "Scaled manually first, fixed autoscaler config second"
+    ],
+    "commands_used": [
+      "kubectl top pods -n kube-system -l k8s-app=kube-dns",
+      "kubectl scale deployment coredns -n kube-system --replicas=8",
+      "kubectl logs -n kube-system -l k8s-app=kube-dns --tail=50 | grep -i 'timeout\\|dropped'",
+      "dig @10.96.150.214 inventory-service-service.default.svc.cluster.local"
+    ],
+    "fix": "Scaled CoreDNS 2 \u2192 8 replicas immediately, raised CPU limit 500m \u2192 2000m, and switched the autoscaler to query-rate-based scaling.",
+    "engineer": "Priya Sharma",
+    "mttr_minutes": 9,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0019",
+    "title": "DNS resolution failures in api-gateway",
+    "service": "api-gateway",
+    "severity": "critical",
+    "started_at": "2026-08-16T18:19:00Z",
+    "resolved_at": "2026-08-16T18:39:00Z",
+    "error_signature": "java.net.UnknownHostException for internal service hostnames",
+    "symptoms": [
+      "inter-service calls failing: UnknownHostException: user-service-service",
+      "kube-dns CPU throttled at 100% (limit too low)",
+      "only services in eu-west-1b affected; 1a and 1c healthy",
+      "external DNS (google.com) still resolving \u2014 internal only"
+    ],
+    "logs_snippet": "2026-08-16T18:19:00Z ERROR [http-nio-8080-exec-12] c.e.api-gateway.OrderClient - call failed\njava.net.UnknownHostException: user-service-service: Name or service not known\n\tat java.base/java.net.Inet6AddressImpl.lookupAllHostAddr(Native Method)\n2026-08-16T18:19:00Z WARN  [kube-dns] CPU throttling: 100% of 500m limit, query queue backing up",
+    "deployment": {
+      "version": "v3.0.0",
+      "deployed_at": "2026-08-16T17:15:00Z"
+    },
+    "git_commit": "5b83a6b",
+    "root_cause": "kube-dns autoscaler misconfigured after cluster upgrade: it scaled on node count, not query rate. A traffic spike 3x'd DNS queries in eu-west-1b and the 2 CoreDNS replicas CPU-throttled, dropping internal resolutions.",
+    "investigation_steps": [
+      "External DNS worked, internal didn't \u2192 pointed at kube-dns, not the app",
+      "kubectl top pods -n kube-system showed coredns at 100% CPU (throttled)",
+      "Checked autoscaler config: still using default node-based formula post-upgrade",
+      "Scaled manually first, fixed autoscaler config second"
+    ],
+    "commands_used": [
+      "kubectl top pods -n kube-system -l k8s-app=kube-dns",
+      "kubectl scale deployment coredns -n kube-system --replicas=8",
+      "kubectl logs -n kube-system -l k8s-app=kube-dns --tail=50 | grep -i 'timeout\\|dropped'",
+      "dig @10.96.220.203 user-service-service.default.svc.cluster.local"
+    ],
+    "fix": "Scaled CoreDNS 2 \u2192 8 replicas immediately, raised CPU limit 500m \u2192 2000m, and switched the autoscaler to query-rate-based scaling.",
+    "engineer": "David Kim",
+    "mttr_minutes": 20,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0020",
+    "title": "inventory-service DB connection pool exhaustion",
+    "service": "inventory-service",
+    "severity": "critical",
+    "started_at": "2026-08-27T03:24:00Z",
+    "resolved_at": "2026-08-27T03:33:00Z",
+    "error_signature": "HTTP 500 spike + 'remaining connection slots are reserved' in postgres logs",
+    "symptoms": [
+      "p99 latency jumped from 180ms to 8.2s",
+      "error rate 38% on /api/v1/inventory/charge",
+      "postgres logs: 'remaining connection slots are reserved for non-replication superuser connections'",
+      "application logs: HikariPool - Connection is not available, request timed out after 30000ms"
+    ],
+    "logs_snippet": "2026-08-27T03:24:00Z ERROR [HikariPool-1 housekeeper] com.zaxxer.hikari.pool.HikariPool - HikariPool-1 - Connection is not available, request timed out after 30000ms.\n2026-08-27T03:24:00Z ERROR [http-nio-8080-exec-214] c.e.inventory-service.PaymentController - charge failed: org.postgresql.util.PSQLException: FATAL: remaining connection slots are reserved for non-replication superuser connections\n2026-08-27T03:24:00Z WARN  [HikariPool-1 housekeeper] com.zaxxer.hikari.pool.HikariPool - HikariPool-1 - Thread starvation or clock leap detected (housekeeper delta=42s).",
+    "deployment": {
+      "version": "v2.5.0",
+      "deployed_at": "2026-08-27T02:50:00Z"
+    },
+    "git_commit": "b5ecdc4",
+    "root_cause": "Database connection pool exhaustion: pool maxed at 200 connections after v2.5.0 increased per-request query fan-out; connections leaked on timeout paths and were never returned.",
+    "investigation_steps": [
+      "Checked Grafana: pg_stat_activity showed 200/200 connections in 'idle in transaction'",
+      "Correlated spike start with deployment v2.5.0 18 minutes earlier",
+      "Confirmed leak via heap dump: 4,100 abandoned PgConnection objects",
+      "Verified fix on staging with 2x load test before prod rollout"
+    ],
+    "commands_used": [
+      "kubectl logs -l app=inventory-service --since=30m | grep -i 'connection is not available' | head -20",
+      "kubectl exec -it postgres-0 -- psql -c \"select count(*), state from pg_stat_activity group by state;\"",
+      "kubectl rollout history deployment/inventory-service",
+      "kubectl set env deployment/inventory-service SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=250"
+    ],
+    "fix": "Increased HikariCP maximumPoolSize from 200 to 250, added leakDetectionThreshold=60s, and rolled back v2.5.0 until the N+1 query regression was patched.",
+    "engineer": "Priya Sharma",
+    "mttr_minutes": 9,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0021",
+    "title": "api-gateway DB connection pool exhaustion",
+    "service": "api-gateway",
+    "severity": "critical",
+    "started_at": "2026-09-01T21:12:00Z",
+    "resolved_at": "2026-09-01T21:17:00Z",
+    "error_signature": "HTTP 500 spike + 'remaining connection slots are reserved' in postgres logs",
+    "symptoms": [
+      "p99 latency jumped from 180ms to 8.2s",
+      "error rate 38% on /api/v1/api/charge",
+      "postgres logs: 'remaining connection slots are reserved for non-replication superuser connections'",
+      "application logs: HikariPool - Connection is not available, request timed out after 30000ms"
+    ],
+    "logs_snippet": "2026-09-01T21:12:00Z ERROR [HikariPool-1 housekeeper] com.zaxxer.hikari.pool.HikariPool - HikariPool-1 - Connection is not available, request timed out after 30000ms.\n2026-09-01T21:12:00Z ERROR [http-nio-8080-exec-214] c.e.api-gateway.PaymentController - charge failed: org.postgresql.util.PSQLException: FATAL: remaining connection slots are reserved for non-replication superuser connections\n2026-09-01T21:12:00Z WARN  [HikariPool-1 housekeeper] com.zaxxer.hikari.pool.HikariPool - HikariPool-1 - Thread starvation or clock leap detected (housekeeper delta=42s).",
+    "deployment": {
+      "version": "v3.0.0",
+      "deployed_at": "2026-09-01T20:29:00Z"
+    },
+    "git_commit": "e3068ca",
+    "root_cause": "Database connection pool exhaustion: pool maxed at 50 connections after v3.0.0 increased per-request query fan-out; connections leaked on timeout paths and were never returned.",
+    "investigation_steps": [
+      "Checked Grafana: pg_stat_activity showed 50/50 connections in 'idle in transaction'",
+      "Correlated spike start with deployment v3.0.0 18 minutes earlier",
+      "Confirmed leak via heap dump: 4,100 abandoned PgConnection objects",
+      "Verified fix on staging with 2x load test before prod rollout"
+    ],
+    "commands_used": [
+      "kubectl logs -l app=api-gateway --since=30m | grep -i 'connection is not available' | head -20",
+      "kubectl exec -it postgres-0 -- psql -c \"select count(*), state from pg_stat_activity group by state;\"",
+      "kubectl rollout history deployment/api-gateway",
+      "kubectl set env deployment/api-gateway SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=500"
+    ],
+    "fix": "Increased HikariCP maximumPoolSize from 50 to 500, added leakDetectionThreshold=60s, and rolled back v3.0.0 until the N+1 query regression was patched.",
+    "engineer": "Arjun Mehta",
+    "mttr_minutes": 5,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0022",
+    "title": "TLS certificate expired for api-gateway",
+    "service": "api-gateway",
+    "severity": "critical",
+    "started_at": "2026-09-02T15:28:00Z",
+    "resolved_at": "2026-09-02T15:48:00Z",
+    "error_signature": "SSLHandshakeException: certificate expired; clients rejecting connections",
+    "symptoms": [
+      "mobile clients failing with CERTIFICATE_VERIFY_FAILED",
+      "curl: (60) SSL certificate problem: certificate has expired",
+      "cert-manager Certificate resource stuck in 'Not Ready'",
+      "ACME challenge failing: ingress annotation removed in v2.8.1"
+    ],
+    "logs_snippet": "2026-09-02T15:28:00Z ERROR [http-nio-8443-exec-3] TLS handshake failed: certificate expired\njavax.net.ssl.SSLHandshakeException: PKIX path validation failed: java.security.cert.CertificateExpiredException: NotAfter: 2026-09-01T15:28:00Z\n2026-09-02T15:28:00Z WARN  [cert-manager] Certificate api-gateway-tls not ready: challenge solver misconfigured",
+    "deployment": {
+      "version": "v2.8.1",
+      "deployed_at": "2026-09-02T15:14:00Z"
+    },
+    "git_commit": "fe9b8d8",
+    "root_cause": "TLS certificate expired at 2026-09-01T15:28:00Z. Auto-renewal broke because v2.8.1 removed the cert-manager ingress annotation, so the ACME HTTP-01 challenge could never complete. The 30-day expiry warning alert was routed to a dead Slack channel.",
+    "investigation_steps": [
+      "openssl s_client showed NotAfter in the past \u2014 expiry confirmed in 30s",
+      "cert-manager described: challenge pending, solver misconfigured",
+      "git blame: annotation removed 41 days ago in v2.8.1 ('cleanup')",
+      "Found the dead alert route \u2014 nobody saw the 30/7/1-day warnings"
+    ],
+    "commands_used": [
+      "echo | openssl s_client -connect api-gateway.example.com:443 2>/dev/null | openssl x509 -noout -dates",
+      "kubectl describe certificate api-gateway-tls -n prod",
+      "kubectl annotate ingress api-gateway cert-manager.io/cluster-issuer=letsencrypt-prod --overwrite",
+      "kubectl cert-manager renew api-gateway-tls -n prod"
+    ],
+    "fix": "Manually issued certificate via cert-manager (restored annotation), forced renewal, and re-routed expiry alerts to the active #sre-alerts channel with a 14-day warning.",
+    "engineer": "Karthik Rao",
+    "mttr_minutes": 20,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0023",
+    "title": "Feature flag misconfiguration broke payment-service checkout",
+    "service": "payment-service",
+    "severity": "high",
+    "started_at": "2026-09-04T05:32:00Z",
+    "resolved_at": "2026-09-04T05:37:00Z",
+    "error_signature": "100% of checkout requests failing after flag fraud-check-v3 rollout",
+    "symptoms": [
+      "checkout success rate 99.1% \u2192 0% at exactly 14:00 UTC",
+      "flag fraud-check-v3 rolled to 100% at 14:00 UTC via LaunchDarkly",
+      "code path behind flag calls v2 pricing API that isn't deployed yet",
+      "no errors in canary because flag was off for canary cohort"
+    ],
+    "logs_snippet": "2026-09-04T05:32:00Z ERROR [http-nio-8080-exec-55] c.e.payment-service.CheckoutService - pricing call failed\nc.e.payment-service.PricingV2Exception: endpoint /v2/price not found (404)\n\tat c.e.payment-service.CheckoutService.priceWithV2(CheckoutService.java:117)\n2026-09-04T05:32:00Z INFO  [launchdarkly] flag fraud-check-v3 evaluated true for 100% of contexts",
+    "deployment": {
+      "version": "v2.7.0",
+      "deployed_at": "2026-09-04T04:25:00Z"
+    },
+    "git_commit": "c5420bb",
+    "root_cause": "Feature flag fraud-check-v3 was rolled to 100% before the v2 pricing service it depends on was deployed. The flag and the service had separate rollout plans owned by different engineers, and the dependency wasn't encoded anywhere.",
+    "investigation_steps": [
+      "Failure started at exactly 14:00 \u2014 checked what changed at 14:00",
+      "LaunchDarkly audit log: flag fraud-check-v3 \u2192 100% at 13:59:48",
+      "Code read: flag-true path calls /v2/price which doesn't exist yet",
+      "Kill-switch first; process fix second"
+    ],
+    "commands_used": [
+      "ldcli flags update fraud-check-v3 --rollout 0  # kill switch",
+      "kubectl get deployments -l app=pricing-v2  # not found \u2014 confirms dependency missing",
+      "git log --oneline --grep='fraud-check-v3' -5"
+    ],
+    "fix": "Killed the flag (instant rollback to v1 path, recovery in 90 seconds), then added a deployment-dependency check to the flag rollout runbook.",
+    "engineer": "Arjun Mehta",
+    "mttr_minutes": 5,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0024",
+    "title": "Regression after v2.6.2 deploy on inventory-service",
+    "service": "inventory-service",
+    "severity": "critical",
+    "started_at": "2026-09-06T13:14:00Z",
+    "resolved_at": "2026-09-06T13:22:00Z",
+    "error_signature": "HTTP 500 spike starting within minutes of deployment v2.6.2",
+    "symptoms": [
+      "error rate 0.2% \u2192 24% within 4 minutes of deploy",
+      "new exception type in logs: NullPointerException in CheckoutFlow",
+      "canary analysis flagged but auto-promotion was disabled",
+      "only pods running v2.6.2 affected; old revision healthy"
+    ],
+    "logs_snippet": "2026-09-06T13:14:00Z ERROR [http-nio-8080-exec-96] c.e.inventory-service.CheckoutFlow - Unhandled exception processing request\njava.lang.NullPointerException: Cannot invoke \"String.length()\" because \"token\" is null\n\tat c.e.inventory-service.CheckoutFlow.validate(CheckoutFlow.java:142)\n\tat c.e.inventory-service.CheckoutFlow.handle(CheckoutFlow.java:88)\n2026-09-06T13:14:00Z INFO  [k8s] deployment/inventory-service scaled UP replica set inventory-service-v2.6.2 to 12",
+    "deployment": {
+      "version": "v2.6.2",
+      "deployed_at": "2026-09-06T12:10:00Z"
+    },
+    "git_commit": "b662bed",
+    "root_cause": "Deployment v2.6.2 shipped a regression: CheckoutFlow.validate() dereferences a nullable auth token. The null case was introduced when the token-refresh flow was refactored in commit b662bed.",
+    "investigation_steps": [
+      "Noticed error spike aligned exactly with deploy timestamp in ArgoCD",
+      "Diffed v2.6.2 vs previous: 14 files changed, token-refresh refactor stood out",
+      "Reproduced NPE locally with missing-token request fixture",
+      "Rolled back first, root-caused second (incident protocol)"
+    ],
+    "commands_used": [
+      "kubectl rollout history deployment/inventory-service",
+      "kubectl rollout undo deployment/inventory-service --to-revision=9",
+      "git log --oneline vv2.6.2..vv3.6.3 -- inventory-service/",
+      "kubectl rollout status deployment/inventory-service --watch"
+    ],
+    "fix": "Immediate rollback to previous revision via kubectl rollout undo; followed by a hotfix adding null-guard + regression test, redeployed as v3.6.3.",
+    "engineer": "Meera Nair",
+    "mttr_minutes": 8,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0025",
+    "title": "user-service pods OOMKilled under load",
+    "service": "user-service",
+    "severity": "high",
+    "started_at": "2026-09-10T13:12:00Z",
+    "resolved_at": "2026-09-10T13:38:00Z",
+    "error_signature": "Kubernetes OOMKilled (exit 137) cascading across user-service pods",
+    "symptoms": [
+      "pods restarting in a loop: 14 restarts in 20 minutes",
+      "kubectl describe pod shows 'Last State: Terminated, Reason: OOMKilled, Exit Code: 137'",
+      "heap usage climbing 200MB/min with no plateau",
+      "GC pause time p99 hit 4.2s before each kill"
+    ],
+    "logs_snippet": "2026-09-10T13:12:00Z WARN  [k8s] pod/user-service-7d9f8c6b9-x4k2p OOMKilled (exit 137), restarting\n2026-09-10T13:12:00Z ERROR [http-nio-8080-exec-31] c.e.user-service.ReportService - request failed mid-stream\njava.lang.OutOfMemoryError: Java heap space\n\tat java.base/java.util.Arrays.copyOf(Arrays.java:3537)\n\tat c.e.user-service.ReportService.buildCsv(ReportService.java:201)",
+    "deployment": {
+      "version": "v2.6.2",
+      "deployed_at": "2026-09-10T11:44:00Z"
+    },
+    "git_commit": "478be93",
+    "root_cause": "Memory leak in CSV export path: buildCsv() materialized the full result set in memory instead of streaming. A large enterprise export (2534,520 rows) blew the 2Gi heap limit.",
+    "investigation_steps": [
+      "kubectl describe pod confirmed OOMKilled, not crashloop from bad image",
+      "Heap dump analyzed with MAT: 1.6GB retained by ArrayList in buildCsv",
+      "Found the offending commit: pagination removed 'for performance' in v2.6.2",
+      "Load-tested streaming fix with 2x largest export before rollout"
+    ],
+    "commands_used": [
+      "kubectl describe pod -l app=user-service | grep -A3 'Last State'",
+      "kubectl exec -it user-service-0 -- jmap -dump:format=b,file=/tmp/heap.hprof 1",
+      "kubectl set resources deployment/user-service --limits=memory=4Gi",
+      "git log --oneline -5 -- user-service/src/main/java/**/ReportService.java"
+    ],
+    "fix": "Raised memory limit 2Gi \u2192 4Gi as immediate relief, then rewrote the export to stream rows via cursor pagination; added heap-growth alert.",
+    "engineer": "Arjun Mehta",
+    "mttr_minutes": 26,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0026",
+    "title": "Regression after v2.8.1 deploy on payment-service",
+    "service": "payment-service",
+    "severity": "critical",
+    "started_at": "2026-09-11T02:48:00Z",
+    "resolved_at": "2026-09-11T03:02:00Z",
+    "error_signature": "HTTP 500 spike starting within minutes of deployment v2.8.1",
+    "symptoms": [
+      "error rate 0.2% \u2192 24% within 4 minutes of deploy",
+      "new exception type in logs: NullPointerException in PaymentValidator",
+      "canary analysis flagged but auto-promotion was disabled",
+      "only pods running v2.8.1 affected; old revision healthy"
+    ],
+    "logs_snippet": "2026-09-11T02:48:00Z ERROR [http-nio-8080-exec-96] c.e.payment-service.PaymentValidator - Unhandled exception processing request\njava.lang.NullPointerException: Cannot invoke \"String.length()\" because \"token\" is null\n\tat c.e.payment-service.PaymentValidator.validate(PaymentValidator.java:142)\n\tat c.e.payment-service.PaymentValidator.handle(PaymentValidator.java:88)\n2026-09-11T02:48:00Z INFO  [k8s] deployment/payment-service scaled UP replica set payment-service-v2.8.1 to 12",
+    "deployment": {
+      "version": "v2.8.1",
+      "deployed_at": "2026-09-11T02:16:00Z"
+    },
+    "git_commit": "ed40ef1",
+    "root_cause": "Deployment v2.8.1 shipped a regression: PaymentValidator.validate() dereferences a nullable auth token. The null case was introduced when the token-refresh flow was refactored in commit ed40ef1.",
+    "investigation_steps": [
+      "Noticed error spike aligned exactly with deploy timestamp in ArgoCD",
+      "Diffed v2.8.1 vs previous: 14 files changed, token-refresh refactor stood out",
+      "Reproduced NPE locally with missing-token request fixture",
+      "Rolled back first, root-caused second (incident protocol)"
+    ],
+    "commands_used": [
+      "kubectl rollout history deployment/payment-service",
+      "kubectl rollout undo deployment/payment-service --to-revision=15",
+      "git log --oneline vv2.8.1..vv2.8.2 -- payment-service/",
+      "kubectl rollout status deployment/payment-service --watch"
+    ],
+    "fix": "Immediate rollback to previous revision via kubectl rollout undo; followed by a hotfix adding null-guard + regression test, redeployed as v2.8.2.",
+    "engineer": "Arjun Mehta",
+    "mttr_minutes": 14,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0027",
+    "title": "Redis connection leak in api-gateway",
+    "service": "api-gateway",
+    "severity": "high",
+    "started_at": "2026-09-19T22:20:00Z",
+    "resolved_at": "2026-09-19T22:38:00Z",
+    "error_signature": "redis.clients.jedis.exceptions.JedisConnectionException: Could not get a resource from the pool",
+    "symptoms": [
+      "cache hit rate collapsed 96% \u2192 11%",
+      "p95 latency 240ms \u2192 3.1s as traffic fell through to DB",
+      "Jedis pool exhausted: 500/500 connections borrowed, 0 idle",
+      "DB CPU spiked to 92% from cache-miss thundering herd"
+    ],
+    "logs_snippet": "2026-09-19T22:20:00Z ERROR [lettuce-nioEventLoop-4-7] c.e.api-gateway.CacheService - cache get failed\nredis.clients.jedis.exceptions.JedisConnectionException: Could not get a resource from the pool\n\tat redis.clients.jedis.util.Pool.getResource(Pool.java:59)\nCaused by: java.util.NoSuchElementException: Timeout waiting for idle object\n2026-09-19T22:20:00Z WARN  [HikariPool-1] connection borrow wait exceeded 5s (cache fallback path)",
+    "deployment": {
+      "version": "v2.8.1",
+      "deployed_at": "2026-09-19T21:04:00Z"
+    },
+    "git_commit": "dc30543",
+    "root_cause": "Redis connection leak: the async cache-write path borrowed Jedis connections without try-with-resources; under retry storms connections were never returned and the 500-connection pool drained over ~40 minutes.",
+    "investigation_steps": [
+      "Grafana: jedis_pool_active climbing monotonically since 09:10, never dropping",
+      "Heap dump: 500 Jedis objects retained by CompletableFuture callbacks",
+      "Code search found 3 borrow sites missing close(); 1 in retry path",
+      "Decided restart-then-patch to stop the bleeding immediately"
+    ],
+    "commands_used": [
+      "redis-cli -h api-gateway-redis info clients | grep connected_clients",
+      "kubectl top pods -l app=api-gateway",
+      "kubectl rollout restart deployment/api-gateway",
+      "grep -rn 'getResource()' api-gateway/src/main/java --include=*.java"
+    ],
+    "fix": "Restarted api-gateway pods to reclaim connections, then shipped a patch wrapping all Jedis borrows in try-with-resources and added pool-exhaustion alerting at 80%.",
+    "engineer": "Sarah Chen",
+    "mttr_minutes": 18,
+    "outcome": "resolved"
+  },
+  {
+    "id": "INC-0028",
+    "title": "Feature flag misconfiguration broke order-service checkout",
+    "service": "order-service",
+    "severity": "high",
+    "started_at": "2026-09-22T11:13:00Z",
+    "resolved_at": "2026-09-22T11:20:00Z",
+    "error_signature": "100% of checkout requests failing after flag new-recommendations rollout",
+    "symptoms": [
+      "checkout success rate 99.1% \u2192 0% at exactly 14:00 UTC",
+      "flag new-recommendations rolled to 100% at 14:00 UTC via LaunchDarkly",
+      "code path behind flag calls v2 pricing API that isn't deployed yet",
+      "no errors in canary because flag was off for canary cohort"
+    ],
+    "logs_snippet": "2026-09-22T11:13:00Z ERROR [http-nio-8080-exec-55] c.e.order-service.CheckoutService - pricing call failed\nc.e.order-service.PricingV2Exception: endpoint /v2/price not found (404)\n\tat c.e.order-service.CheckoutService.priceWithV2(CheckoutService.java:117)\n2026-09-22T11:13:00Z INFO  [launchdarkly] flag new-recommendations evaluated true for 100% of contexts",
+    "deployment": {
+      "version": "v2.4.0",
+      "deployed_at": "2026-09-22T10:46:00Z"
+    },
+    "git_commit": "d9224ec",
+    "root_cause": "Feature flag new-recommendations was rolled to 100% before the v2 pricing service it depends on was deployed. The flag and the service had separate rollout plans owned by different engineers, and the dependency wasn't encoded anywhere.",
+    "investigation_steps": [
+      "Failure started at exactly 14:00 \u2014 checked what changed at 14:00",
+      "LaunchDarkly audit log: flag new-recommendations \u2192 100% at 13:59:48",
+      "Code read: flag-true path calls /v2/price which doesn't exist yet",
+      "Kill-switch first; process fix second"
+    ],
+    "commands_used": [
+      "ldcli flags update new-recommendations --rollout 0  # kill switch",
+      "kubectl get deployments -l app=pricing-v2  # not found \u2014 confirms dependency missing",
+      "git log --oneline --grep='new-recommendations' -5"
+    ],
+    "fix": "Killed the flag (instant rollback to v1 path, recovery in 90 seconds), then added a deployment-dependency check to the flag rollout runbook.",
+    "engineer": "Karthik Rao",
+    "mttr_minutes": 7,
+    "outcome": "resolved"
+  }
+]
