@@ -965,7 +965,7 @@ function smallTalkReply(text) {
   if (/^(how are you|how're you|how r u)\b/.test(t)) {
     return `<p>Running smooth — memory's warm and ready. What incident are we digging into today?</p>`;
   }
-  if (/^(who are you|what are you|what can you do|\bhelp\b|what is this|about you)\b/.test(t)) {
+  if (/^(who are you|what are you|what can you do|\bhelp\b|what is this|about you)\b/.test(t) || /^can (you|u) do (anything|something|this|that|it)$/.test(t)) {
     return `<p>I'm <b>Trace</b>, your incident-memory agent:</p><p>• <b>Investigate</b> — paste an alert or error and I'll break it down<br>• <b>Recall</b> — I search past incidents for similar ones<br>• <b>Recommend</b> — I suggest fixes based on what worked before<br>• <b>Learn</b> — resolve an incident and it becomes memory for next time</p><p>Try me — describe something that's broken.</p>`;
   }
   if (/^(thanks?|thank you|thx|nandri)\b/.test(t)) {
