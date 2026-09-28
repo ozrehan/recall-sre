@@ -77,12 +77,16 @@ function renderActAuth() {
   const panel = $("actPanel");
   if (authUser) {
     panel.classList.remove("auth-mode");
-    box.innerHTML = `<div class="auth-card"><div class="user-chip">
-      <div class="uavatar">${esc(initialOf(authUser.name))}</div>
+    const av = (profData && profData.avatar_url)
+      ? `<img class="uavatar" src="${esc(profData.avatar_url)}" alt="" style="object-fit:cover">`
+      : `<div class="uavatar">${esc(initialOf(authUser.name))}</div>`;
+    box.innerHTML = `<div class="auth-card"><div class="user-chip clickable" id="userChip" title="Open your profile">
+      ${av}
       <div class="user-meta"><b>${esc(authUser.name)}</b><span>${esc(authUser.email)}</span></div>
       <button class="logoutbtn" id="logoutBtn">Log out</button>
     </div></div>`;
-    $("logoutBtn").addEventListener("click", doLogout);
+    $("logoutBtn").addEventListener("click", (e) => { e.stopPropagation(); doLogout(); });
+    $("userChip").addEventListener("click", openProfile);
     return;
   }
   const lu = lastUser();
@@ -200,6 +204,7 @@ function onAuthSuccess(data) {
   rememberUser(data.user);
   authUser = data.user;
   renderAuthSlot(); renderActAuth(); closeLoginSheet();
+  refreshProfile();
 }
 
 /* "Login with GitHub": after GitHub redirects back with ?github=login&token=,
@@ -293,7 +298,7 @@ function renderLoginSheet() {
 async function doLogout() {
   try { await fetch("/api/auth/logout", { method: "POST" }); } catch (e) {}
   localStorage.removeItem("tm_token");
-  authUser = null;
+  authUser = null; profData = null;
   renderAuthSlot(); renderActAuth();
 }
 
@@ -1040,6 +1045,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   } catch (e) {}
   await authMe();
   renderAuthSlot(); renderActAuth(); renderRecents();
+  if (authUser) refreshProfile();
   handleGithubLoginReturn();
   let sheetOff = false;
   try { sheetOff = !!sessionStorage.getItem("tm_sheet_off"); } catch (e) {}
@@ -1088,14 +1094,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("sheetScrim").addEventListener("click", closeLoginSheet);
   $("actClose").addEventListener("click", () => setActPanel(false));
   $("actScrim").addEventListener("click", () => setActPanel(false));
-  $("actTabs").addEventListener("click", (e) => {
-    const b = e.target.closest("button"); if (!b) return;
+  $("actTabs").addEventListener("click", (e) => {    const b = e.target.closest("button"); if (!b) return;
     actFilter = b.dataset.f;
     document.querySelectorAll("#actTabs button").forEach((x) => x.classList.toggle("active", x === b));
     renderActivity();
   });
   $("setClose").addEventListener("click", () => setModal(false));
   $("setScrim").addEventListener("click", () => setModal(false));
+  $("profClose").addEventListener("click", closeProfile);
+  $("profScrim").addEventListener("click", closeProfile);
   $("setSaveBtn").addEventListener("click", saveSettings);
   $("setSyncNow").addEventListener("click", async () => {
     const b = $("setSyncNow");
@@ -1117,3 +1124,144 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 });
+
+/* ---------- profile: view + edit (username, bio, pic, socials) ---------- */
+const SOCIAL_META = [
+  ["linkedin", "LinkedIn", '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.45 20.45h-3.55v-5.57c0-1.33-.03-3.04-1.85-3.04-1.86 0-2.14 1.45-2.14 2.94v5.67H9.35V9h3.41v1.56h.05c.47-.9 1.63-1.85 3.36-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28zM5.34 7.43a2.06 2.06 0 1 1 0-4.12 2.06 2.06 0 0 1 0 4.12zM7.12 20.45H3.55V9h3.57v11.45z"/></svg>'],
+  ["leetcode", "LeetCode", '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M13.48 7.46 9.3 11.64l4.18 4.18-2.12 2.12-6.3-6.3 6.3-6.3 2.12 2.12zm6.94 4.18-2.12-2.12-2.83 2.83 2.83 2.83 2.12-2.12-1.41-1.42h3.53l-1.41 1.42 2.12 2.12 2.83-2.83-2.83-2.83 1.42-1.41h-3.54l1.42 1.41zM8.5 2.5 6.38 4.62l8.49 8.49 2.12-2.12L8.5 2.5z" opacity=".9"/></svg>'],
+  ["twitter", "X", '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.24 2.25h3.31l-7.23 8.26 8.5 11.24h-6.66l-5.21-6.82-5.97 6.82H1.67l7.73-8.84L1.25 2.25h6.83l4.71 6.23 5.45-6.23zm-1.16 17.52h1.83L7.08 4.13H5.12l11.96 15.64z"/></svg>'],
+  ["instagram", "Instagram", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="5"/><circle cx="12" cy="12" r="4.5"/><circle cx="17.5" cy="6.5" r="1.2" fill="currentColor" stroke="none"/></svg>'],
+  ["github", "GitHub", GH_SVG.replace('width="20" height="20"', 'width="18" height="18"')],
+  ["website", "Website", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>'],
+];
+let profData = null, profEdit = false;
+
+function profAvatarHtml(p, cls) {
+  if (p.avatar_url) return `<img class="${cls}" src="${esc(p.avatar_url)}" alt="">`;
+  return `<div class="${cls} initial">${esc(initialOf(p.name))}</div>`;
+}
+function profJoined(p) {
+  try {
+    const d = new Date(p.created_at);
+    return "Joined " + d.toLocaleDateString(undefined, {month: "long", year: "numeric"});
+  } catch (e) { return ""; }
+}
+function openProfile() {
+  if (!authUser) return;
+  $("profModal").classList.add("open");
+  $("profScrim").classList.add("show");
+  profEdit = false;
+  renderProfile();
+  refreshProfile();
+}
+function closeProfile() {
+  $("profModal").classList.remove("open");
+  $("profScrim").classList.remove("show");
+}
+async function refreshProfile() {
+  try {
+    const r = await tmApi.get("/api/profile");
+    if (r.profile) { profData = r.profile; renderProfile(); }
+  } catch (e) {}
+}
+function renderProfile() {
+  const body = $("profBody");
+  const p = profData || {name: authUser.name, email: authUser.email, username: "", bio: "", avatar_url: "", socials: {}, stats: {}};
+  if (!profEdit) {
+    const soc = (p.socials || {});
+    const socHtml = SOCIAL_META.filter(([k]) => soc[k]).map(([k, label, svg]) =>
+      `<a href="${esc(soc[k])}" target="_blank" rel="noopener" title="${label}">${svg}</a>`).join("");
+    body.innerHTML = `<div class="prof-view">
+      ${profAvatarHtml(p, "prof-avatar")}
+      <div class="prof-name">${esc(p.name)}</div>
+      ${p.username ? `<div class="prof-username">@${esc(p.username)}</div>` : ""}
+      ${p.bio ? `<div class="prof-bio">${esc(p.bio)}</div>` : ""}
+      <div class="prof-joined">${esc(profJoined(p))}</div>
+      ${socHtml ? `<div class="prof-socials">${socHtml}</div>` : ""}
+      <div class="prof-stats">
+        <div><b>${(p.stats && p.stats.incidents) || 0}</b><span>incidents</span></div>
+        <div><b>${(p.stats && p.stats.investigations) || 0}</b><span>investigations</span></div>
+      </div>
+      <button class="btn wide prof-edit-btn" id="profEditBtn">Edit profile</button>
+    </div>`;
+    $("profEditBtn").addEventListener("click", () => { profEdit = true; renderProfile(); });
+    return;
+  }
+  const soc = (p.socials || {});
+  const socInputs = SOCIAL_META.map(([k, label]) =>
+    `<div><label style="margin:0 0 4px">${label}</label><input data-soc="${k}" placeholder="${label} username or URL" value="${esc((soc[k] || "").replace(/"/g, ""))}"></div>`).join("");
+  body.innerHTML = `<div class="prof-form">
+    <label>Photo</label>
+    <div class="prof-avatar-row">
+      <div id="profAvaPrev">${profAvatarHtml(p, "prof-avatar")}</div>
+      <div class="prof-ava-btns">
+        <button class="btn sm" id="profAvaBtn">Upload</button>
+        ${p.avatar_url ? `<button class="btn sm ghost" id="profAvaRm">Remove</button>` : ""}
+      </div>
+      <input type="file" id="profAvaFile" accept="image/*" hidden>
+    </div>
+    <input type="hidden" id="profAvatarUrl" value="${esc((p.avatar_url || "").replace(/"/g, ""))}">
+    <label>Name</label><input id="profName" value="${esc(p.name)}" maxlength="60">
+    <label>Username</label><input id="profUsername" value="${esc(p.username)}" placeholder="e.g. oz_rehan" maxlength="30">
+    <label>About me</label><textarea id="profBio" maxlength="280" placeholder="A line or two about you…">${esc(p.bio)}</textarea>
+    <label>Social links</label><div class="prof-soc-grid">${socInputs}</div>
+    <div class="prof-err" id="profErr"></div>
+    <div class="prof-actions">
+      <button class="btn wide" id="profSave">Save</button>
+      <button class="btn wide ghost" id="profCancel">Cancel</button>
+    </div>
+  </div>`;
+  $("profCancel").addEventListener("click", () => { profEdit = false; renderProfile(); });
+  $("profAvaBtn").addEventListener("click", () => $("profAvaFile").click());
+  $("profAvaFile").addEventListener("change", (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      // downscale big photos so the profile stays light
+      const img = new Image();
+      img.onload = () => {
+        const s = Math.min(1, 256 / Math.max(img.width, img.height));
+        const cv = document.createElement("canvas");
+        cv.width = Math.round(img.width * s); cv.height = Math.round(img.height * s);
+        cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+        const url = cv.toDataURL("image/jpeg", 0.82);
+        $("profAvatarUrl").value = url;
+        $("profAvaPrev").innerHTML = `<img class="prof-avatar" src="${url}" alt="">`;
+      };
+      img.src = rd.result;
+    };
+    rd.readAsDataURL(f);
+  });
+  const rm = $("profAvaRm");
+  if (rm) rm.addEventListener("click", () => {
+    $("profAvatarUrl").value = "";
+    $("profAvaPrev").innerHTML = `<div class="prof-avatar initial">${esc(initialOf(p.name))}</div>`;
+    rm.remove();
+  });
+  $("profSave").addEventListener("click", async () => {
+    const err = $("profErr"); err.textContent = "";
+    const socials = {};
+    body.querySelectorAll("[data-soc]").forEach((i) => { socials[i.dataset.soc] = i.value.trim(); });
+    const payload = {
+      name: $("profName").value.trim(),
+      username: $("profUsername").value.trim(),
+      bio: $("profBio").value.trim(),
+      avatar_url: $("profAvatarUrl").value,
+      socials,
+    };
+    const btn = $("profSave"); btn.textContent = "Saving…"; btn.disabled = true;
+    try {
+      const r = await tmApi.post("/api/profile", payload);
+      if (r.error) throw new Error(r.error);
+      profData = r.profile; profEdit = false;
+      authUser.name = r.profile.name;
+      try {
+        const lu = JSON.parse(localStorage.getItem("tm_last_user") || "null");
+        if (lu) { lu.name = r.profile.name; localStorage.setItem("tm_last_user", JSON.stringify(lu)); }
+      } catch (e) {}
+      renderAuthSlot(); renderActAuth();
+      renderProfile();
+    } catch (e) { err.textContent = e.message || "Couldn't save — try again."; }
+    btn.textContent = "Save"; btn.disabled = false;
+  });
+}
