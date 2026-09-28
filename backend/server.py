@@ -201,7 +201,9 @@ class State:
             },
             "github_repo": self.github_repo,
             "repo_url": f"https://github.com/{self.github_repo}",
-            "github_connection": _gh_api.test_connection(self.github_token),
+            "github_connection": {**_gh_api.test_connection(self.github_token),
+                "repo_permissions": _gh_api.repo_permissions(
+                    self.github_repo, self.github_token)},
         }
 
     def set_sentinel_minutes(self, minutes: int) -> dict:
