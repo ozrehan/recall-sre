@@ -50,6 +50,7 @@ from backend.plugins import (
 )
 from backend.plugins import sentinel as _sentinel
 from backend.plugins import autofix as _autofix
+from backend.plugins import github_api as _gh_api
 from backend.integrations import github_issues as gh_api
 from backend.memory.db import IncidentDB
 from backend.memory.hybrid_store import HybridMemoryStore
@@ -200,6 +201,7 @@ class State:
             },
             "github_repo": self.github_repo,
             "repo_url": f"https://github.com/{self.github_repo}",
+            "github_connection": _gh_api.test_connection(self.github_token),
         }
 
     def set_sentinel_minutes(self, minutes: int) -> dict:
