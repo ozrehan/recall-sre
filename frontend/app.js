@@ -1047,6 +1047,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   renderAuthSlot(); renderActAuth(); renderRecents();
   if (authUser) refreshProfile();
   handleGithubLoginReturn();
+  try {
+    const uq = new URLSearchParams(location.search).get("u");
+    if (uq) { history.replaceState(null, "", location.pathname); openProfile(uq); }
+  } catch (e) {}
   let sheetOff = false;
   try { sheetOff = !!sessionStorage.getItem("tm_sheet_off"); } catch (e) {}
   if (!authUser && !sheetOff) openLoginSheet();
@@ -1101,8 +1105,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   $("setClose").addEventListener("click", () => setModal(false));
   $("setScrim").addEventListener("click", () => setModal(false));
-  $("profClose").addEventListener("click", closeProfile);
-  $("profScrim").addEventListener("click", closeProfile);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("profPage").hidden) closeProfile(); });
   $("setSaveBtn").addEventListener("click", saveSettings);
   $("setSyncNow").addEventListener("click", async () => {
     const b = $("setSyncNow");
@@ -1125,38 +1128,60 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 });
 
-/* ---------- profile: view + edit (username, bio, pic, socials) ---------- */
+/* ---------- profile page (dark, full screen, Luma-style) ---------- */
 const SOCIAL_META = [
   ["linkedin", "LinkedIn", '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.45 20.45h-3.55v-5.57c0-1.33-.03-3.04-1.85-3.04-1.86 0-2.14 1.45-2.14 2.94v5.67H9.35V9h3.41v1.56h.05c.47-.9 1.63-1.85 3.36-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28zM5.34 7.43a2.06 2.06 0 1 1 0-4.12 2.06 2.06 0 0 1 0 4.12zM7.12 20.45H3.55V9h3.57v11.45z"/></svg>'],
-  ["leetcode", "LeetCode", '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M13.48 7.46 9.3 11.64l4.18 4.18-2.12 2.12-6.3-6.3 6.3-6.3 2.12 2.12zm6.94 4.18-2.12-2.12-2.83 2.83 2.83 2.83 2.12-2.12-1.41-1.42h3.53l-1.41 1.42 2.12 2.12 2.83-2.83-2.83-2.83 1.42-1.41h-3.54l1.42 1.41zM8.5 2.5 6.38 4.62l8.49 8.49 2.12-2.12L8.5 2.5z" opacity=".9"/></svg>'],
+  ["leetcode", "LeetCode", '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M13.48 7.2 9.3 11.4l4.18 4.18-2.12 2.12-6.3-6.3 6.3-6.3 2.12 2.1zm7.1 2.1-2.12 2.12 2.83 2.83-2.83 2.83 2.12 2.12 4.95-4.95-4.95-4.95zM8.5 2.5 6.38 4.62l8.49 8.49 2.12-2.12L8.5 2.5z"/></svg>'],
   ["twitter", "X", '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.24 2.25h3.31l-7.23 8.26 8.5 11.24h-6.66l-5.21-6.82-5.97 6.82H1.67l7.73-8.84L1.25 2.25h6.83l4.71 6.23 5.45-6.23zm-1.16 17.52h1.83L7.08 4.13H5.12l11.96 15.64z"/></svg>'],
   ["instagram", "Instagram", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="5"/><circle cx="12" cy="12" r="4.5"/><circle cx="17.5" cy="6.5" r="1.2" fill="currentColor" stroke="none"/></svg>'],
-  ["github", "GitHub", GH_SVG.replace('width="20" height="20"', 'width="18" height="18"')],
+  ["tiktok", "TikTok", '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z"/></svg>'],
+  ["github", "GitHub", GH_SVG.replace('width="20" height="20"', 'width="22" height="22"')],
   ["website", "Website", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>'],
 ];
-let profData = null, profEdit = false;
+const PP_BACK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5m7-7-7 7 7 7"/></svg>';
+const PP_DOTS = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>';
+const PP_CAL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="3"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>';
+const PP_TICKET = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5h16a1 1 0 0 1 1 1v4a2.5 2.5 0 0 0 0 5v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-4a2.5 2.5 0 0 0 0-5V6a1 1 0 0 1 1-1zm11 4a1 1 0 0 0-1 1v6a1 1 0 1 0 2 0v-6a1 1 0 0 0-1-1z"/></svg>';
+let profData = null, profEdit = false, profIsPublic = false;
 
-function profAvatarHtml(p, cls) {
-  if (p.avatar_url) return `<img class="${cls}" src="${esc(p.avatar_url)}" alt="">`;
-  return `<div class="${cls} initial">${esc(initialOf(p.name))}</div>`;
+function ppToast(msg) {
+  document.querySelectorAll(".pp-toast").forEach((t) => t.remove());
+  const t = document.createElement("div");
+  t.className = "pp-toast"; t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2200);
 }
 function profJoined(p) {
   try {
     const d = new Date(p.created_at);
-    return "Joined " + d.toLocaleDateString(undefined, {month: "long", year: "numeric"});
+    return "Joined " + d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
   } catch (e) { return ""; }
 }
-function openProfile() {
-  if (!authUser) return;
-  $("profModal").classList.add("open");
-  $("profScrim").classList.add("show");
+function profAvatar(p, cls) {
+  if (p.avatar_url) return `<img class="${cls}" src="${esc(p.avatar_url)}" alt="">`;
+  return `<div class="${cls} initial">${esc(initialOf(p.name || "?"))}</div>`;
+}
+// openProfile(): no arg = own page; username string = someone's public page (?u=)
+function openProfile(username) {
+  profIsPublic = !!username;
   profEdit = false;
+  profData = null;
+  $("profPage").hidden = false;
+  document.body.style.overflow = "hidden";
   renderProfile();
-  refreshProfile();
+  if (username) {
+    tmApi.get("/api/profile/public?username=" + encodeURIComponent(username))
+      .then((r) => { if (r.profile) { profData = r.profile; renderProfile(); } })
+      .catch(() => {});
+  } else {
+    if (!authUser) { closeProfile(); return; }
+    refreshProfile();
+  }
 }
 function closeProfile() {
-  $("profModal").classList.remove("open");
-  $("profScrim").classList.remove("show");
+  $("profPage").hidden = true;
+  document.body.style.overflow = "";
+  profEdit = false;
 }
 async function refreshProfile() {
   try {
@@ -1164,60 +1189,106 @@ async function refreshProfile() {
     if (r.profile) { profData = r.profile; renderProfile(); }
   } catch (e) {}
 }
+function ppShareLink() {
+  if (!profData || !profData.username) { ppToast("Set a username first to share your profile"); return; }
+  return location.origin + "/?u=" + encodeURIComponent(profData.username);
+}
 function renderProfile() {
-  const body = $("profBody");
-  const p = profData || {name: authUser.name, email: authUser.email, username: "", bio: "", avatar_url: "", socials: {}, stats: {}};
+  const body = $("profPageBody");
+  const p = profData || { name: "", username: "", bio: "", avatar_url: "", socials: {}, stats: {}, repos: [] };
+  const soc = p.socials || {};
+  const top = `<div class="pp-top">
+      <button class="pp-iconbtn" id="ppBack" aria-label="Back">${PP_BACK}</button>
+      <div class="pp-menuwrap">
+        <button class="pp-iconbtn" id="ppDots" aria-label="More">${PP_DOTS}</button>
+        <div class="pp-menu" id="ppMenu" hidden>
+          <button id="ppCopy">Copy profile link</button>
+          <button id="ppShare">Share profile</button>
+        </div>
+      </div>
+    </div>`;
   if (!profEdit) {
-    const soc = (p.socials || {});
     const socHtml = SOCIAL_META.filter(([k]) => soc[k]).map(([k, label, svg]) =>
       `<a href="${esc(soc[k])}" target="_blank" rel="noopener" title="${label}">${svg}</a>`).join("");
-    body.innerHTML = `<div class="prof-view">
-      ${profAvatarHtml(p, "prof-avatar")}
-      <div class="prof-name">${esc(p.name)}</div>
-      ${p.username ? `<div class="prof-username">@${esc(p.username)}</div>` : ""}
-      ${p.bio ? `<div class="prof-bio">${esc(p.bio)}</div>` : ""}
-      <div class="prof-joined">${esc(profJoined(p))}</div>
-      ${socHtml ? `<div class="prof-socials">${socHtml}</div>` : ""}
-      <div class="prof-stats">
-        <div><b>${(p.stats && p.stats.incidents) || 0}</b><span>incidents</span></div>
-        <div><b>${(p.stats && p.stats.investigations) || 0}</b><span>investigations</span></div>
+    const repos = p.repos || [];
+    const st = p.stats || {};
+    const repoRows = repos.map((r) =>
+      `<a class="pp-repo" href="https://github.com/${esc(r)}" target="_blank" rel="noopener">${GH_SVG.replace('width="20" height="20"', 'width="20" height="20"')}<span>${esc(r)}</span><small>GitHub ↗</small></a>`).join("");
+    body.innerHTML = `<div class="pp-wrap">${top}
+      ${profAvatar(p, "pp-avatar")}
+      <h1 class="pp-name">${esc(p.name || "…")}</h1>
+      ${p.username ? `<div class="pp-handle">@${esc(p.username)}</div>` : ""}
+      ${p.bio ? `<p class="pp-bio">${esc(p.bio)}</p>` : ""}
+      <div class="pp-joined">${PP_CAL}<span>${esc(profJoined(p))}</span></div>
+      <div class="pp-stats">
+        <span><b>${repos.length}</b>Repos</span>
+        <span><b>${st.incidents || 0}</b>Issues</span>
+        <span><b>${st.investigations || 0}</b>Solved</span>
       </div>
-      <button class="btn wide prof-edit-btn" id="profEditBtn">Edit profile</button>
+      ${socHtml ? `<div class="pp-socials">${socHtml}</div>` : ""}
+      ${!profIsPublic ? `<button class="pp-edit" id="ppEditBtn">Edit profile</button>` : ""}
+      <hr class="pp-div">
+      <div class="pp-sec">
+        <h3>Connected repositories</h3>
+        ${repos.length ? repoRows : `<div class="pp-empty">
+          <div class="pp-ticket">${PP_TICKET}</div>
+          <b>Nothing Here, Yet</b>
+          <p>${esc(p.name || "This user")} hasn't connected any repositories at this time.</p>
+        </div>`}
+      </div>
     </div>`;
-    $("profEditBtn").addEventListener("click", () => { profEdit = true; renderProfile(); });
+    $("ppBack").addEventListener("click", closeProfile);
+    const dots = $("ppDots"), menu = $("ppMenu");
+    dots.addEventListener("click", (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; });
+    document.addEventListener("click", () => { menu.hidden = true; }, { once: true });
+    $("ppCopy").addEventListener("click", async () => {
+      const link = ppShareLink(); if (!link) return;
+      try { await navigator.clipboard.writeText(link); ppToast("Profile link copied"); }
+      catch (e) { ppToast(link); }
+    });
+    $("ppShare").addEventListener("click", async () => {
+      const link = ppShareLink(); if (!link) return;
+      if (navigator.share) { try { await navigator.share({ title: (p.name || "") + " on TraceMind", url: link }); } catch (e) {} }
+      else { try { await navigator.clipboard.writeText(link); ppToast("Profile link copied"); } catch (e) {} }
+    });
+    const eb = $("ppEditBtn");
+    if (eb) eb.addEventListener("click", () => { profEdit = true; renderProfile(); });
     return;
   }
-  const soc = (p.socials || {});
+  // ---- edit mode ----
   const socInputs = SOCIAL_META.map(([k, label]) =>
-    `<div><label style="margin:0 0 4px">${label}</label><input data-soc="${k}" placeholder="${label} username or URL" value="${esc((soc[k] || "").replace(/"/g, ""))}"></div>`).join("");
-  body.innerHTML = `<div class="prof-form">
-    <label>Photo</label>
-    <div class="prof-avatar-row">
-      <div id="profAvaPrev">${profAvatarHtml(p, "prof-avatar")}</div>
-      <div class="prof-ava-btns">
-        <button class="btn sm" id="profAvaBtn">Upload</button>
-        ${p.avatar_url ? `<button class="btn sm ghost" id="profAvaRm">Remove</button>` : ""}
+    `<div><label style="margin:0 0 6px">${label}</label><input data-soc="${k}" placeholder="${label} username or URL" value="${esc(String(soc[k] || "").replace(/"/g, ""))}"></div>`).join("");
+  body.innerHTML = `<div class="pp-wrap">${top}
+    <div class="pp-form">
+      <h1 class="pp-name" style="font-size:24px">Edit profile</h1>
+      <label>Photo</label>
+      <div class="pp-avarow">
+        <div id="ppAvaPrev">${profAvatar(p, "pp-avatar")}</div>
+        <div class="pp-avabtns">
+          <button class="btn sm" id="ppAvaBtn">Upload</button>
+          ${p.avatar_url ? `<button class="btn sm ghost" id="ppAvaRm">Remove</button>` : ""}
+        </div>
+        <input type="file" id="ppAvaFile" accept="image/*" hidden>
       </div>
-      <input type="file" id="profAvaFile" accept="image/*" hidden>
-    </div>
-    <input type="hidden" id="profAvatarUrl" value="${esc((p.avatar_url || "").replace(/"/g, ""))}">
-    <label>Name</label><input id="profName" value="${esc(p.name)}" maxlength="60">
-    <label>Username</label><input id="profUsername" value="${esc(p.username)}" placeholder="e.g. oz_rehan" maxlength="30">
-    <label>About me</label><textarea id="profBio" maxlength="280" placeholder="A line or two about you…">${esc(p.bio)}</textarea>
-    <label>Social links</label><div class="prof-soc-grid">${socInputs}</div>
-    <div class="prof-err" id="profErr"></div>
-    <div class="prof-actions">
-      <button class="btn wide" id="profSave">Save</button>
-      <button class="btn wide ghost" id="profCancel">Cancel</button>
-    </div>
-  </div>`;
-  $("profCancel").addEventListener("click", () => { profEdit = false; renderProfile(); });
-  $("profAvaBtn").addEventListener("click", () => $("profAvaFile").click());
-  $("profAvaFile").addEventListener("change", (e) => {
+      <input type="hidden" id="ppAvatarUrl" value="${esc(String(p.avatar_url || "").replace(/"/g, ""))}">
+      <label>Name</label><input id="ppName" value="${esc(p.name || "")}" maxlength="60">
+      <label>Username</label><input id="ppUsername" value="${esc(p.username || "")}" placeholder="e.g. oz_rehan" maxlength="30">
+      <label>About me</label><textarea id="ppBio" maxlength="280" placeholder="A line or two about you…">${esc(p.bio || "")}</textarea>
+      <label>Social links</label><div class="pp-socgrid">${socInputs}</div>
+      <div class="pp-err" id="ppErr"></div>
+      <div class="pp-actions">
+        <button class="btn wide" id="ppSave">Save</button>
+        <button class="btn wide ghost" id="ppCancel">Cancel</button>
+      </div>
+    </div></div>`;
+  $("ppBack").addEventListener("click", closeProfile);
+  $("ppDots").addEventListener("click", () => ppToast("Finish editing first"));
+  $("ppCancel").addEventListener("click", () => { profEdit = false; renderProfile(); });
+  $("ppAvaBtn").addEventListener("click", () => $("ppAvaFile").click());
+  $("ppAvaFile").addEventListener("change", (e) => {
     const f = e.target.files[0]; if (!f) return;
     const rd = new FileReader();
     rd.onload = () => {
-      // downscale big photos so the profile stays light
       const img = new Image();
       img.onload = () => {
         const s = Math.min(1, 256 / Math.max(img.width, img.height));
@@ -1225,31 +1296,31 @@ function renderProfile() {
         cv.width = Math.round(img.width * s); cv.height = Math.round(img.height * s);
         cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
         const url = cv.toDataURL("image/jpeg", 0.82);
-        $("profAvatarUrl").value = url;
-        $("profAvaPrev").innerHTML = `<img class="prof-avatar" src="${url}" alt="">`;
+        $("ppAvatarUrl").value = url;
+        $("ppAvaPrev").innerHTML = `<img class="pp-avatar" src="${url}" alt="">`;
       };
       img.src = rd.result;
     };
     rd.readAsDataURL(f);
   });
-  const rm = $("profAvaRm");
+  const rm = $("ppAvaRm");
   if (rm) rm.addEventListener("click", () => {
-    $("profAvatarUrl").value = "";
-    $("profAvaPrev").innerHTML = `<div class="prof-avatar initial">${esc(initialOf(p.name))}</div>`;
+    $("ppAvatarUrl").value = "";
+    $("ppAvaPrev").innerHTML = `<div class="pp-avatar initial">${esc(initialOf($("ppName").value || "?"))}</div>`;
     rm.remove();
   });
-  $("profSave").addEventListener("click", async () => {
-    const err = $("profErr"); err.textContent = "";
+  $("ppSave").addEventListener("click", async () => {
+    const err = $("ppErr"); err.textContent = "";
     const socials = {};
     body.querySelectorAll("[data-soc]").forEach((i) => { socials[i.dataset.soc] = i.value.trim(); });
     const payload = {
-      name: $("profName").value.trim(),
-      username: $("profUsername").value.trim(),
-      bio: $("profBio").value.trim(),
-      avatar_url: $("profAvatarUrl").value,
+      name: $("ppName").value.trim(),
+      username: $("ppUsername").value.trim(),
+      bio: $("ppBio").value.trim(),
+      avatar_url: $("ppAvatarUrl").value,
       socials,
     };
-    const btn = $("profSave"); btn.textContent = "Saving…"; btn.disabled = true;
+    const btn = $("ppSave"); btn.textContent = "Saving…"; btn.disabled = true;
     try {
       const r = await tmApi.post("/api/profile", payload);
       if (r.error) throw new Error(r.error);
@@ -1261,6 +1332,7 @@ function renderProfile() {
       } catch (e) {}
       renderAuthSlot(); renderActAuth();
       renderProfile();
+      ppToast("Profile saved");
     } catch (e) { err.textContent = e.message || "Couldn't save — try again."; }
     btn.textContent = "Save"; btn.disabled = false;
   });
