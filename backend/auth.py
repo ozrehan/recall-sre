@@ -43,6 +43,15 @@ _SECRET = os.environ.get("AUTH_SECRET") or secrets.token_hex(32)
 
 def ensure_schema(conn) -> None:
     conn.executescript(AUTH_SCHEMA)
+    # migration: link GitHub identities for "Login with GitHub"
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN github_id TEXT")
+    except Exception:
+        pass
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_github ON users(github_id)")
+    except Exception:
+        pass
 
 
 def _hash_password(password: str) -> str:
@@ -202,4 +211,71 @@ def google_login(conn, id_token: str, client_id: str) -> dict:
             (cur.lastrowid,)).fetchone()
         user = _public(row)
     user["provider"] = "google"
+    return {"token": issue_token(user["id"]), "user": user}
+
+
+def github_login(conn, access_token: str) -> dict:
+    """Log in / sign up with a GitHub OAuth access token.
+
+    Verifies the token against api.github.com, then finds-or-creates the
+    user by GitHub account id (linking to an existing same-email account).
+    Stdlib-only, no extra dependencies.
+    """
+    import json as _json
+    import urllib.request as _ur
+
+    if not access_token:
+        raise ValueError("missing GitHub credential")
+
+    def gh_get(path):
+        req = _ur.Request(
+            "https://api.github.com" + path,
+            headers={"Authorization": "Bearer " + access_token,
+                     "Accept": "application/vnd.github+json",
+                     "User-Agent": "TraceMind"})
+        with _ur.urlopen(req, timeout=15) as r:
+            return _json.load(r)
+
+    try:
+        me = gh_get("/user")
+    except Exception:
+        raise ValueError("couldn't verify GitHub sign-in — try again")
+    gid = str(me.get("id") or "")
+    if not gid:
+        raise ValueError("GitHub didn't return an account id")
+    email = (me.get("email") or "").strip().lower()
+    if not email:
+        try:
+            emails = gh_get("/user/emails") or []
+            prim = [e for e in emails if e.get("primary") and e.get("verified")]
+            email = ((prim or emails)[0].get("email", "") if emails else "").strip().lower()
+        except Exception:
+            email = ""
+    name = (me.get("name") or me.get("login") or email.split("@")[0]).strip()[:60]
+    ensure_schema(conn)
+    row = conn.execute(
+        "SELECT id, name, email, created_at FROM users WHERE github_id=?",
+        (gid,)).fetchone()
+    if not row and email:
+        row = conn.execute(
+            "SELECT id, name, email, created_at FROM users WHERE email=?",
+            (email,)).fetchone()
+        if row:
+            conn.execute("UPDATE users SET github_id=? WHERE id=?", (gid, row[0]))
+    if row:
+        user = _public(row)
+        if not row[1] and name:
+            conn.execute("UPDATE users SET name=? WHERE id=?", (name, user["id"]))
+            user["name"] = name
+    else:
+        if not email:
+            raise ValueError("GitHub didn't share a verified email for this account")
+        cur = conn.execute(
+            "INSERT INTO users (name, email, pw_hash, github_id) VALUES (?,?,?,?)",
+            (name, email, "github-oauth", gid))
+        row = conn.execute(
+            "SELECT id, name, email, created_at FROM users WHERE id=?",
+            (cur.lastrowid,)).fetchone()
+        user = _public(row)
+    user["provider"] = "github"
     return {"token": issue_token(user["id"]), "user": user}
