@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import sys
 import threading
 import time
@@ -68,6 +69,32 @@ def _oauth_dbg(msg: str) -> None:
                     + " " + msg[:200] + "\n")
     except Exception:
         pass
+
+
+# One-time login codes: the OAuth callback redirects with ?code=... instead
+# of a raw token, so a copied/shared URL can never carry a live login to
+# another phone. Single use, 2-minute expiry.
+_OAUTH_CODES: dict = {}
+_OAUTH_CODES_LOCK = threading.Lock()
+
+
+def _issue_oauth_code(token: str) -> str:
+    code = secrets.token_urlsafe(24)
+    now = time.time()
+    with _OAUTH_CODES_LOCK:
+        for k in [k for k, (_, exp) in _OAUTH_CODES.items() if exp < now]:
+            del _OAUTH_CODES[k]
+        _OAUTH_CODES[code] = (token, now + 120)
+    return code
+
+
+def _consume_oauth_code(code: str):
+    with _OAUTH_CODES_LOCK:
+        item = _OAUTH_CODES.pop(code or "", None)
+    if not item:
+        return None
+    token, exp = item
+    return token if exp >= time.time() else None
 DB_PATH = os.environ.get("DB_PATH", os.path.join(HERE, "data", "tracemind.db"))
 
 MIME = {
@@ -538,7 +565,7 @@ class Handler(BaseHTTPRequestHandler):
             q = urllib.parse.urlencode({
                 "client_id": GITHUB_CLIENT_ID,
                 "redirect_uri": cb,
-                "scope": "repo",
+                "scope": "repo user:email",
                 "state": state,
             })
             return self._redirect("https://github.com/login/oauth/authorize?" + q)
@@ -577,7 +604,7 @@ class Handler(BaseHTTPRequestHandler):
                                     c, out["user"]["id"], access)
                             except Exception:
                                 pass
-                        return self._redirect("/?github=login&token=" + urllib.parse.quote(out["token"], safe=""))
+                        return self._redirect("/?github=login&code=" + _issue_oauth_code(out["token"]))
                     except Exception as e:
                         _oauth_dbg("callback: github_login failed: %s" % e)
                         return self._redirect("/?github=error")
@@ -596,8 +623,14 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception as e:
                         _oauth_dbg("callback: connect failed: %s" % e)
                     return self._redirect("/?github=connected")
+                if state == "connect":
+                    # Legacy connect without a nonce: no logged-in user to
+                    # bind the token to. Don't silently drop it — tell the
+                    # user to log in first.
+                    _oauth_dbg("callback: legacy connect without nonce")
+                    return self._redirect("/?github=nologin")
                 _oauth_dbg("callback: unknown state=%s" % state)
-                return self._redirect("/?github=connected")
+                return self._redirect("/?github=error")
             except Exception as e:
                 _oauth_dbg("callback: unexpected error: %s" % e)
                 return self._redirect("/?github=error")
@@ -914,6 +947,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, {"error": str(e)})
         if path == "/api/auth/logout":
             return self._send(200, {"ok": True})
+        if path == "/api/auth/oauth/consume":
+            # Exchange a single-use OAuth login code for the token.
+            token = _consume_oauth_code(body.get("code", ""))
+            if not token:
+                return self._send(400, {"error": "login expired — try again"})
+            uid = auth_mod.verify_token(token)
+            try:
+                db = STATE.memory.db
+                with db._lock, db._conn() as c:
+                    user = auth_mod.get_user(c, uid) if uid else None
+            except Exception:
+                user = None
+            if not user:
+                return self._send(401, {"error": "login expired — try again"})
+            return self._send(200, {"token": token, "user": user})
         if path == "/api/auth/google":
             try:
                 db = STATE.memory.db
