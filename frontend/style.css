@@ -464,6 +464,9 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
   padding: 6px 14px; margin: 4px auto 14px; width: fit-content; max-width: 90%;
 }
 
+/* ---------- doodle icons ---------- */
+.ico-siren, .ico-brain, .ico-db { width: 1.2em; height: 1.2em; vertical-align: -0.22em; }
+
 /* ---------- login bottom sheet (ChatGPT-style) ---------- */
 .sheet-scrim {
   position: fixed; inset: 0; background: rgba(0,0,0,.35); opacity: 0;
