@@ -417,3 +417,46 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
 .actpanel.auth-mode .act-day,
 .actpanel.auth-mode .act-list { display: none; }
 .actpanel.auth-mode .act-auth { margin-top: 18px; }
+
+/* ---------- login bottom sheet (ChatGPT-style) ---------- */
+.sheet-scrim {
+  position: fixed; inset: 0; background: rgba(0,0,0,.35); opacity: 0;
+  pointer-events: none; transition: opacity .25s; z-index: 80;
+}
+.sheet-scrim.show { opacity: 1; pointer-events: auto; }
+.loginsheet {
+  position: fixed; z-index: 81; background: #fff; color: var(--ink);
+  left: 50%; bottom: 0; width: 100%; max-width: 480px;
+  transform: translate(-50%, 105%); transition: transform .32s ease;
+  border-radius: 22px 22px 0 0; padding: 10px 22px 30px;
+  max-height: 92dvh; overflow-y: auto; box-sizing: border-box;
+}
+.loginsheet.open { transform: translate(-50%, 0); }
+@media (min-width: 721px) {
+  .loginsheet {
+    bottom: auto; top: 50%; border-radius: 22px; padding: 22px 28px 30px;
+    transform: translate(-50%, -46%) scale(.96); opacity: 0; pointer-events: none;
+    transition: transform .25s ease, opacity .25s ease;
+    box-shadow: 0 24px 70px rgba(0,0,0,.22);
+  }
+  .loginsheet.open { transform: translate(-50%, -50%) scale(1); opacity: 1; pointer-events: auto; }
+  .sheet-handle { display: none; }
+}
+.sheet-handle { width: 44px; height: 5px; border-radius: 99px; background: #e5e7eb; margin: 4px auto 12px; }
+.sheet-close {
+  position: absolute; top: 12px; right: 14px; border: 0; background: none;
+  font-size: 18px; cursor: pointer; color: var(--muted); padding: 8px;
+}
+.sheet-title { font-size: 27px; font-weight: 700; text-align: center; letter-spacing: -.01em; }
+.sheet-sub { text-align: center; color: var(--muted); font-size: 14.5px; margin: 8px 0 18px; }
+.loginsheet .g-account { margin-bottom: 14px; }
+.loginsheet input {
+  width: 100%; box-sizing: border-box; border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 14px; font-size: 15px; margin-bottom: 10px;
+  background: #fff; color: var(--ink);
+}
+.loginsheet input:focus { outline: 2px solid #111; outline-offset: -1px; }
+.loginsheet .auth-tabs { margin: 2px 0 14px; }
+.loginsheet .auth-go { padding: 13px 0; font-size: 15px; border-radius: 10px; }
+#gsiBtnSheet { display: flex; justify-content: center; margin-bottom: 4px; min-height: 40px; }
+#gsiBtnSheet > div { width: 100% !important; }
