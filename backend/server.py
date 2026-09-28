@@ -664,6 +664,27 @@ class Handler(BaseHTTPRequestHandler):
             if user:
                 return self._send(200, {"user": user})
             return self._send(401, {"error": "not logged in"})
+        if path == "/api/profile":
+            uid = self._uid()
+            if not uid:
+                return self._send(401, {"error": "login required"})
+            try:
+                db = STATE.memory.db
+                with db._lock, db._conn() as c:
+                    prof = auth_mod.get_profile(c, uid)
+                if not prof:
+                    return self._send(404, {"error": "no profile"})
+                try:
+                    stats = db.stats()
+                except Exception:
+                    stats = {}
+                prof["stats"] = {
+                    "incidents": stats.get("incidents", 0),
+                    "investigations": stats.get("investigations", 0),
+                }
+                return self._send(200, {"profile": prof})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
         # static files
         rel = path.lstrip("/") or "index.html"
         fpath = os.path.normpath(os.path.join(FRONTEND_DIR, rel))
@@ -691,6 +712,26 @@ class Handler(BaseHTTPRequestHandler):
                 with db._lock, db._conn() as c:
                     nonce = auth_mod.create_github_nonce(c, uid)
                 return self._send(200, {"nonce": nonce})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+        if path == "/api/profile":
+            uid = self._require_uid()
+            if not uid:
+                return
+            try:
+                db = STATE.memory.db
+                with db._lock, db._conn() as c:
+                    prof = auth_mod.update_profile(
+                        c, uid,
+                        name=body.get("name") if "name" in body else None,
+                        username=body.get("username") if "username" in body else None,
+                        bio=body.get("bio") if "bio" in body else None,
+                        avatar_url=body.get("avatar_url") if "avatar_url" in body else None,
+                        socials=body.get("socials") if "socials" in body else None,
+                    )
+                return self._send(200, {"profile": prof})
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
             except Exception as e:
                 return self._send(500, {"error": str(e)})
         if path == "/api/investigate":
