@@ -340,7 +340,7 @@ function resolveCard(draft, onDone) {
     btn.disabled = false;
     if (res.error) { btn.textContent = "Error — try again"; return; }
     wrap.innerHTML = `<div class="learned-ok">🧠 <b>Learned.</b> Stored as <b>${esc(res.id)}</b> — memory now holds <b>${res.memory_size}</b> incidents. Fire a similar incident and watch the agent recall this one.</div>`;
-    scrollBottom(); refreshMemory(); onDone && onDone(res);
+    scrollBottom(); refreshMemory(); saveTranscript(); onDone && onDone(res);
     logActivity("resolved", draft.title || "Incident resolved",
       `Root cause stored in memory — ${res.memory_size} incidents remembered`);
   };
@@ -353,11 +353,13 @@ function getActivity() {
   try { return JSON.parse(localStorage.getItem(ACT_KEY) || "[]"); } catch (e) { return []; }
 }
 function logActivity(type, title, desc) {
+  const ts = Date.now();
   const items = getActivity();
-  items.unshift({ type, title, desc, ts: Date.now() });
+  items.unshift({ type, title, desc, ts });
   try { localStorage.setItem(ACT_KEY, JSON.stringify(items.slice(0, 100))); } catch (e) {}
   renderActivity();
   renderRecents();
+  return ts;
 }
 function fmtTime(ts) {
   const d = new Date(ts);
@@ -386,12 +388,92 @@ function setActPanel(open) {
   $("actScrim").classList.toggle("show", open);
 }
 
+/* ---------- chat transcripts: reopen previous chats ---------- */
+let currentChatTs = null;
+const CHAT_PREFIX = "tm_chat_";
+function saveTranscript() {
+  if (!currentChatTs) return;
+  try {
+    const t = document.querySelector(".thread");
+    if (!t) return;
+    const msgs = [];
+    t.querySelectorAll(":scope > .msg").forEach((m) => {
+      if (m.classList.contains("user")) {
+        const b = m.querySelector(".bubble");
+        if (b) msgs.push({ who: "u", html: b.innerHTML });
+      } else if (m.classList.contains("agent")) {
+        const b = m.querySelector(".body");
+        if (b) msgs.push({ who: "a", html: b.innerHTML });
+      }
+    });
+    if (!msgs.length) return;
+    localStorage.setItem(CHAT_PREFIX + currentChatTs, JSON.stringify({ ts: currentChatTs, msgs }));
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(CHAT_PREFIX)) keys.push(k);
+    }
+    keys.sort().reverse();
+    keys.slice(20).forEach((k) => { try { localStorage.removeItem(k); } catch (e) {} });
+  } catch (e) {
+    try {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(CHAT_PREFIX)) keys.push(k);
+      }
+      keys.sort();
+      if (keys.length) localStorage.removeItem(keys[0]);
+    } catch (e2) {}
+  }
+}
+function getTranscript(ts) {
+  try { return JSON.parse(localStorage.getItem(CHAT_PREFIX + ts) || "null"); } catch (e) { return null; }
+}
+function openChat(ts) {
+  const tr = getTranscript(ts);
+  const a = getActivity().find((x) => x.ts === ts);
+  if (!tr) {
+    if (a && !busy) investigate(alertFromText(a.title), a.title); // legacy: no saved transcript, re-fire
+    document.body.classList.remove("side-open");
+    return;
+  }
+  saveTranscript();
+  busy = false;
+  currentChatTs = ts;
+  $("chat").innerHTML = "";
+  $("chips").style.display = "none";
+  const t = thread();
+  const banner = document.createElement("div");
+  banner.className = "viewing-banner";
+  banner.textContent = `Viewing past investigation — ${new Date(ts).toLocaleString()}`;
+  t.appendChild(banner);
+  tr.msgs.forEach((m) => {
+    const el = document.createElement("div");
+    if (m.who === "u") {
+      el.className = "msg user";
+      el.innerHTML = `<div class="bubble">${m.html}</div>`;
+    } else {
+      el.className = "msg agent";
+      el.innerHTML = `<div class="avatar"><img src="logo-icon.png" alt="TM"></div><div class="body">${m.html}</div>`;
+      el.querySelectorAll("[data-act=save]").forEach((b) => {
+        b.disabled = true;
+        b.textContent = "Stored earlier — view only";
+      });
+      el.querySelectorAll("textarea, input").forEach((f) => { f.disabled = true; });
+    }
+    t.appendChild(el);
+  });
+  scrollBottom();
+  document.body.classList.remove("side-open");
+}
+
 /* ---------- flow ---------- */
 async function investigate(alert, userLabel) {
   if (busy) return; busy = true;
   $("chips").style.display = "none";
   addUserMsg(userLabel || `🚨 ${alert.title} — ${alert.service} · ${alert.severity}`);
-  logActivity("fired", alert.title, `${alert.service} · ${alert.severity} — investigation started`);
+  currentChatTs = logActivity("fired", alert.title, `${alert.service} · ${alert.severity} — investigation started`);
   const body = addAgentMsg();
   const t1 = addTyping(body);
   const res = await api("/api/investigate", { method: "POST", body: JSON.stringify({ alert }) });
@@ -411,6 +493,7 @@ async function investigate(alert, userLabel) {
   say(body, `<p>When it's fixed, teach me — that's how the memory grows:</p>`);
   body.appendChild(resolveCard(res.incident));
   scrollBottom();
+  saveTranscript();
   busy = false;
 }
 
@@ -457,11 +540,9 @@ function renderRecents() {
 }
 function wireSbRow(r) {
   const ts = +r.dataset.ts;
-  const a = getActivity().find((x) => x.ts === ts);
   r.querySelector(".sb-row-main").addEventListener("click", () => {
-    if (!a || busy) return;
-    investigate(alertFromText(a.title), a.title);
-    document.body.classList.remove("side-open");
+    if (busy) return;
+    openChat(ts);
   });
   r.querySelector(".sb-pin").addEventListener("click", (e) => { e.stopPropagation(); togglePin(ts); });
 }
@@ -569,6 +650,7 @@ function relTime(iso) {
 
 /* ---------- welcome / new chat ---------- */
 function welcome() {
+  currentChatTs = null;
   $("chat").innerHTML = "";
   $("chips").style.display = "";
   const body = addAgentMsg();
@@ -708,6 +790,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   refreshSendBtn();
   $("newChatBtn").addEventListener("click", () => {
     if (busy) return;
+    saveTranscript();
     welcome(); loadIncidents();
     document.body.classList.remove("side-open");
   });
