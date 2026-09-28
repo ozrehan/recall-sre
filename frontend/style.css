@@ -81,7 +81,7 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
   border: 2px solid #e5e7eb; background: #fff; padding: 2px; flex: none;
 }
 .avatarbtn:hover { border-color: #111; }
-.avatarbtn img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
+.avatarbtn img, .avatarbtn video { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
 .iconbtn {
   margin-left: 8px; border: 1px solid var(--border); background: #fff;
   border-radius: 999px; width: 36px; height: 36px; font-size: 17px; cursor: pointer;
@@ -124,7 +124,7 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
   font-size: 18px; cursor: pointer; color: var(--muted);
 }
 .act-profile { text-align: center; margin: 10px 0 18px; }
-.act-profile img {
+.act-profile img, .act-profile video {
   width: 84px; height: 84px; border-radius: 50%; object-fit: cover;
   border: 1px solid var(--border); background: #fff;
 }
