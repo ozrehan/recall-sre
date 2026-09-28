@@ -297,6 +297,10 @@ async function refreshMemory() {
     const mttrs = seedIncidents.map((i) => i.mttr_minutes).filter((x) => typeof x === "number");
     $("memMttr").textContent = mttrs.length ? Math.round(mttrs.reduce((a, b) => a + b, 0) / mttrs.length) + " min" : "—";
     $("memSvc").textContent = new Set(seedIncidents.map((i) => i.service)).size || "—";
+    try {
+      const s = await api("/api/db/stats");
+      $("memDb").textContent = `sqlite · ${s.total_incidents}`;
+    } catch (e) { $("memDb").textContent = "—"; }
   } catch (e) { /* offline */ }
 }
 
