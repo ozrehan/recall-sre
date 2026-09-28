@@ -432,6 +432,15 @@ async function refreshGithubPanel() {
     const firstRepo = repos[0] || st.github_repo;
     $("ghRepoLink").href = firstRepo ? "https://github.com/" + firstRepo : "#";
     const gc = st.github_connection || {};
+    $("ghOauthBtn").style.display = st.oauth_connected ? "none" : "";
+    $("ghDisconnectBtn").style.display = st.oauth_connected ? "" : "none";
+    $("ghOauthHint").style.display =
+      (!st.oauth_connected && !st.oauth_configured) ? "" : "none";
+    $("ghOauthText").textContent = st.oauth_connected
+      ? "Connected as @" + (gc.user || "?") + " via GitHub — access granted by you."
+      : (gc.connected
+          ? "Using a saved token as @" + (gc.user || "?") + "."
+          : "Not connected.");
     const perms = gc.repo_permissions || {};
     if (gc.connected) {
       $("ghStatusText").textContent =
@@ -493,6 +502,17 @@ function bindPanels() {
   $("ghScrim").addEventListener("click", () => setPanel("ghPanel", "ghScrim", false));
   $("plugClose").addEventListener("click", () => setPanel("plugPanel", "plugScrim", false));
   $("plugScrim").addEventListener("click", () => setPanel("plugPanel", "plugScrim", false));
+  $("ghOauthBtn").addEventListener("click", () => {
+    location.href = "/api/github/oauth/start";
+  });
+  $("ghDisconnectBtn").addEventListener("click", async () => {
+    await tmApi.post("/api/github/disconnect", {});
+    refreshGithubPanel();
+  });
+  if (location.search.includes("github=connected")) {
+    history.replaceState(null, "", location.pathname);
+    setTimeout(refreshGithubPanel, 300);
+  }
   document.querySelectorAll("#ghModePills button").forEach((b) => {
     b.addEventListener("click", async () => {
       await tmApi.post("/api/github/mode", {mode: b.dataset.mode});
