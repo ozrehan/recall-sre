@@ -199,12 +199,33 @@ class HindsightMemoryStore(MemoryStore):
         return None
 
     def count(self) -> int:
+        """Number of distinct incidents remembered (via metadata.incident_json)."""
         try:
-            resp = self.client.list_memories(self.bank_id, limit=1000)
-            units = getattr(resp, "items", None) or []
-            docs = {getattr(u, "document_id", None) for u in units}
-            docs.discard(None)
-            return len(docs)
+            seen: set[str] = set()
+            offset = 0
+            while True:
+                resp = self.client.list_memories(self.bank_id, limit=100, offset=offset)
+                units = getattr(resp, "items", None) or []
+                if not units:
+                    break
+                for u in units:
+                    meta = getattr(u, "metadata", None) or {}
+                    raw = meta.get("incident_json")
+                    if raw:
+                        try:
+                            inc = json.loads(raw)
+                        except (TypeError, ValueError):
+                            continue
+                        if inc.get("id"):
+                            seen.add(inc["id"])
+                total = getattr(resp, "total", 0) or 0
+                offset += len(units)
+                if offset >= total or len(units) < 100:
+                    break
+            if seen:
+                return len(seen)
+            # fall back to raw unit count so the number is never misleadingly 0
+            return total
         except Exception:
             return 0
 
