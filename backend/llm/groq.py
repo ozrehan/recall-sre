@@ -98,8 +98,15 @@ def groq_chat(api_key: str, system: str, user: str,
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            detail = ""
+        raise RuntimeError(f"Groq HTTP {e.code} model={model}: {detail}")
     return (data["choices"][0]["message"]["content"] or "").strip()
 
 
