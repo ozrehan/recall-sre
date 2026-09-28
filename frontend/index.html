@@ -54,13 +54,21 @@
       <div class="act-status" id="ghStatus"><span class="dot"></span><span id="ghStatusText">Checking…</span></div>
     </div>
     <div class="plug-card">
-      <b>Connected repository</b>
-      <p class="plug-sub" id="ghRepoLine">—</p>
+      <b>Access mode</b>
+      <div class="mode-pills" id="ghModePills">
+        <button data-mode="read">Read only</button>
+        <button data-mode="write">Read &amp; Write</button>
+      </div>
+      <p class="plug-sub" id="ghModeSub">Read &amp; Write lets Trace fix problems by opening pull requests.</p>
+    </div>
+    <div class="plug-card">
+      <b>Connected repositories</b>
+      <div id="ghRepoList"></div>
       <div class="gh-row">
         <input id="ghRepoInput" placeholder="owner/repo" autocomplete="off" spellcheck="false">
-        <button class="btn-dark" id="ghConnectBtn">Connect</button>
+        <button class="btn-dark" id="ghConnectBtn">Add</button>
       </div>
-      <p class="plug-sub">Trace watches this repo on the cloud server — even with the site closed.</p>
+      <p class="plug-sub">Trace watches these repos on the cloud server — even with the site closed.</p>
     </div>
     <div class="plug-card">
       <b>Repo Sentinel</b>
