@@ -49,10 +49,9 @@ def _file_incident(repo: str, kind: str, title: str, symptoms: str,
     }
 
 
-def scan_once(state) -> dict[str, Any]:
-    """One scan pass. Returns a summary dict; never raises."""
+def scan_repo(state, repo: str) -> dict[str, Any]:
+    """Scan one repo. Returns a summary dict; never raises."""
     db = state.memory.db
-    repo = state.github_repo
     token = state.github_token
     result: dict[str, Any] = {
         "at": _now(), "repo": repo, "problems": [], "error": None,
@@ -151,3 +150,24 @@ def scan_interval_minutes(db) -> int:
                           1440))
     except ValueError:
         return 15
+
+def scan_once(state) -> dict[str, Any]:
+    """One scan pass over ALL connected repos. Never raises."""
+    combined: dict[str, Any] = {
+        "at": _now(), "problems": [], "repos": {}, "error": None}
+    for repo in state.github_repos:
+        try:
+            r = scan_repo(state, repo)
+            combined["repos"][repo] = {
+                "problems": len(r.get("problems", [])),
+                "error": r.get("error"),
+            }
+            combined["problems"].extend(r.get("problems", []))
+        except Exception as e:
+            combined["repos"][repo] = {"problems": 0,
+                                       "error": str(e)[:120]}
+    db = state.memory.db
+    db.meta_set("sentinel_last_run", combined["at"])
+    import json as _json
+    db.meta_set("sentinel_last_result", _json.dumps(combined)[:4000])
+    return combined
