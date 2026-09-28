@@ -319,12 +319,40 @@ async function saveSettings() {
 }
 
 /* ---------- composer ---------- */
+const WAVE_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><rect x="3.4" y="10" width="2.2" height="4" rx="1.1"/><rect x="7.4" y="7" width="2.2" height="10" rx="1.1"/><rect x="11" y="4" width="2.2" height="16" rx="1.1"/><rect x="14.6" y="8" width="2.2" height="8" rx="1.1"/><rect x="18.2" y="10.5" width="2.2" height="3" rx="1.1"/></svg>';
+const ARROW_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
+function refreshSendBtn() {
+  const has = $("input").value.trim().length > 0;
+  const btn = $("sendBtn");
+  btn.innerHTML = has ? ARROW_ICON : WAVE_ICON;
+  btn.classList.toggle("send", has);
+  btn.title = has ? "Send" : "Voice input";
+  btn.setAttribute("aria-label", has ? "Send" : "Voice input");
+}
 function send() {
   const inp = $("input");
   const text = inp.value.trim();
   if (!text || busy) return;
-  inp.value = ""; inp.style.height = "auto"; $("sendBtn").disabled = true;
+  inp.value = ""; inp.style.height = "auto"; refreshSendBtn();
   investigate(alertFromText(text), text);
+}
+let recog = null, listening = false;
+function toggleVoice() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return;
+  if (listening) { try { recog.stop(); } catch (e) {} return; }
+  const inp = $("input"), mic = $("micBtn");
+  recog = new SR();
+  recog.lang = "en-US"; recog.interimResults = false; recog.maxAlternatives = 1;
+  recog.onresult = (e) => {
+    const t = e.results[0][0].transcript;
+    inp.value = (inp.value ? inp.value + " " : "") + t;
+    inp.dispatchEvent(new Event("input", { bubbles: true }));
+    inp.focus();
+  };
+  const done = () => { listening = false; mic.classList.remove("live"); };
+  recog.onend = done; recog.onerror = done;
+  try { recog.start(); listening = true; mic.classList.add("live"); } catch (e) { done(); }
 }
 document.addEventListener("DOMContentLoaded", async () => {
   welcome();
@@ -334,13 +362,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   const inp = $("input");
   inp.addEventListener("input", () => {
     inp.style.height = "auto"; inp.style.height = Math.min(inp.scrollHeight, 160) + "px";
-    $("sendBtn").disabled = !inp.value.trim();
+    refreshSendBtn();
   });
   inp.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
-  $("sendBtn").addEventListener("click", send);
-  $("sendBtn").disabled = true;
+  $("sendBtn").addEventListener("click", () => {
+    if ($("input").value.trim()) send(); else toggleVoice();
+  });
+  $("micBtn").addEventListener("click", toggleVoice);
+  if (!window.SpeechRecognition && !window.webkitSpeechRecognition) $("micBtn").classList.add("hidden");
+  $("plusBtn").addEventListener("click", () => { if (!busy) $("newChatBtn").click(); });
+  refreshSendBtn();
   $("newChatBtn").addEventListener("click", () => {
     if (busy) return;
     welcome(); loadIncidents();
