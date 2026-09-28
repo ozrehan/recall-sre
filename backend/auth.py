@@ -151,3 +151,54 @@ def get_user(conn, user_id: int):
         "SELECT id, name, email, created_at FROM users WHERE id=?",
         (user_id,)).fetchone()
     return _public(row) if row else None
+
+
+def google_login(conn, id_token: str, client_id: str) -> dict:
+    """Verify a Google ID token via Google's tokeninfo and find-or-create the user.
+
+    Uses Google's server-side verification (TLS) instead of local RSA checks —
+    stdlib-only, no extra dependencies.
+    """
+    import json as _json
+    import urllib.parse as _up
+    import urllib.request as _ur
+
+    if not client_id:
+        raise ValueError("Google login is not configured on the server yet")
+    if not id_token:
+        raise ValueError("missing Google credential")
+    url = ("https://oauth2.googleapis.com/tokeninfo?"
+           + _up.urlencode({"id_token": id_token}))
+    try:
+        with _ur.urlopen(url, timeout=15) as r:
+            info = _json.load(r)
+    except Exception:
+        raise ValueError("couldn't verify Google sign-in — try again")
+    if info.get("aud") != client_id:
+        raise ValueError("Google sign-in rejected (audience mismatch)")
+    if info.get("email_verified") not in ("true", True):
+        raise ValueError("your Google email is not verified")
+    email = (info.get("email") or "").strip().lower()
+    name = (info.get("name") or email.split("@")[0]).strip()[:60]
+    if not email:
+        raise ValueError("Google didn't return an email address")
+    ensure_schema(conn)
+    row = conn.execute(
+        "SELECT id, name, email, created_at FROM users WHERE email=?",
+        (email,)).fetchone()
+    if row:
+        user = _public(row)
+        if not row[1] and name:
+            conn.execute("UPDATE users SET name=? WHERE id=?",
+                         (name, user["id"]))
+            user["name"] = name
+    else:
+        # password-less account: pw_hash sentinel never matches _check_password
+        cur = conn.execute(
+            "INSERT INTO users (name, email, pw_hash) VALUES (?,?,?)",
+            (name, email, "google-oauth"))
+        row = conn.execute(
+            "SELECT id, name, email, created_at FROM users WHERE id=?",
+            (cur.lastrowid,)).fetchone()
+        user = _public(row)
+    return {"token": issue_token(user["id"]), "user": user}
