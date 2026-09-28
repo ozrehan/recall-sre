@@ -1286,6 +1286,24 @@ async function refreshProfile() {
     if (r.profile) { profData = r.profile; renderProfile(); renderAuthSlot(); renderActAuth(); }
   } catch (e) {}
 }
+async function ppToggleFollow() {
+  const btn = $("ppFollowBtn");
+  if (!btn || !profData || !profData.username || ppFollowBusy) return;
+  ppFollowBusy = true;
+  const following = btn.classList.contains("on");
+  try {
+    const r = await tmApi.post(following ? "/api/profile/unfollow" : "/api/profile/follow",
+                               { username: profData.username });
+    if (r.error) throw new Error(r.error);
+    profData.followers = r.followers; profData.following = r.following;
+    profData.is_following = r.is_following;
+    btn.classList.toggle("on", r.is_following);
+    btn.textContent = r.is_following ? "Following" : "Follow";
+    const n = $("ppFollowersN"); if (n) n.textContent = r.followers;
+  } catch (e) { ppToast("Couldn't update follow — try again"); }
+  ppFollowBusy = false;
+}
+let ppFollowBusy = false;
 function ppShareLink() {
   if (!profData || !profData.username) { ppToast("Set a username first to share your profile"); return; }
   return location.origin + "/?u=" + encodeURIComponent(profData.username);
@@ -1322,8 +1340,13 @@ function renderProfile() {
         <span><b>${st.incidents || 0}</b>Issues</span>
         <span><b>${st.investigations || 0}</b>Solved</span>
       </div>
+      <div class="pp-followrow">
+        <span><b id="ppFollowersN">${p.followers || 0}</b>Followers</span>
+        <span><b id="ppFollowingN">${p.following || 0}</b>Following</span>
+      </div>
       ${socHtml ? `<div class="pp-socials">${socHtml}</div>` : ""}
       ${!profIsPublic ? `<button class="pp-edit" id="ppEditBtn">Edit profile</button>` : ""}
+      ${(profIsPublic && !p.is_self && authUser) ? `<button class="pp-followbtn${p.is_following ? " on" : ""}" id="ppFollowBtn">${p.is_following ? "Following" : "Follow"}</button>` : ""}
       <hr class="pp-div">
       <div class="pp-sec">
         <h3>Connected repositories</h3>
@@ -1350,6 +1373,8 @@ function renderProfile() {
     });
     const eb = $("ppEditBtn");
     if (eb) eb.addEventListener("click", () => { profEdit = true; renderProfile(); });
+    const fb = $("ppFollowBtn");
+    if (fb) fb.addEventListener("click", ppToggleFollow);
     return;
   }
   // ---- edit mode ----
