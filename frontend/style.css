@@ -338,3 +338,55 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
 }
 
 
+
+/* ---------- auth: login button, user avatar, panel auth card ---------- */
+.loginbtn {
+  background: #111; color: #fff; border: 0; border-radius: 999px;
+  padding: 10px 22px; font-size: 14.5px; font-weight: 600; cursor: pointer;
+  flex: none; white-space: nowrap;
+}
+.loginbtn:hover { background: #000; }
+.uavatar {
+  width: 44px; height: 44px; border-radius: 50%; cursor: pointer; flex: none;
+  border: 2px solid #e5e7eb; background: #111; color: #fff; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 18px; font-weight: 700;
+}
+.uavatar:hover { border-color: #111; }
+@media (min-width: 721px) { .uavatar { width: 52px; height: 52px; font-size: 20px; } }
+.act-auth { margin: 2px 0 16px; }
+.auth-card {
+  border: 1px solid var(--border); border-radius: 14px; padding: 16px;
+  background: #fafafa;
+}
+.auth-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.auth-tabs button {
+  flex: 1; border: 1px solid var(--border); background: #fff; border-radius: 999px;
+  padding: 8px 0; font-size: 13.5px; font-weight: 600; cursor: pointer; color: var(--muted);
+}
+.auth-tabs button.active { background: #111; border-color: #111; color: #fff; }
+.auth-card input {
+  width: 100%; box-sizing: border-box; border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px; font-size: 14px; margin-bottom: 10px;
+  background: #fff; color: var(--ink);
+}
+.auth-card input:focus { outline: 2px solid #111; outline-offset: -1px; }
+.auth-go {
+  width: 100%; background: #111; color: #fff; border: 0; border-radius: 8px;
+  padding: 11px 0; font-size: 14.5px; font-weight: 600; cursor: pointer;
+}
+.auth-go:hover { background: #000; }
+.auth-go:disabled { opacity: .55; cursor: default; }
+.auth-err { color: #b91c1c; font-size: 13px; margin: 8px 0 0; min-height: 18px; }
+.auth-note { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; line-height: 1.5; }
+.user-chip { display: flex; align-items: center; gap: 12px; }
+.user-chip .uavatar { width: 46px; height: 46px; font-size: 19px; cursor: default; }
+.user-chip .uavatar:hover { border-color: #e5e7eb; }
+.user-meta { flex: 1; min-width: 0; }
+.user-meta b { display: block; font-size: 15.5px; }
+.user-meta span { display: block; font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.logoutbtn {
+  border: 1px solid var(--border); background: #fff; border-radius: 999px;
+  padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; flex: none;
+}
+.logoutbtn:hover { background: #f3f4f6; }
