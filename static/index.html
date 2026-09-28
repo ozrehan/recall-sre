@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RecallSRE — Turn every production incident into organizational memory</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="logo">🧠</div>
+  <div>
+    <h1>Recall<span class="accent">SRE</span></h1>
+    <div class="tagline">Turn every production incident into organizational memory.</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="timetravel">
+    <span>🕰 time travel:</span>
+    <div class="seg">
+      <button data-mode="empty">Day 1 · blank memory</button>
+      <button data-mode="trained" class="active">Day 120 · trained</button>
+    </div>
+  </div>
+  <div class="badge" id="backendBadge">memory: <b>…</b></div>
+  <div class="badge">incidents remembered: <b id="memCount">…</b></div>
+</header>
+
+<main>
+  <section>
+    <h2>🔥 Fire an incident</h2>
+    <div class="scenarios" id="scenarios"></div>
+  </section>
+
+  <section>
+    <div class="grid">
+      <div class="panel live" id="livePanel">
+        <h3><span class="dot"></span> Live incident</h3>
+        <div class="empty-note">Pick an incident above to begin.</div>
+      </div>
+      <div class="panel" id="matchPanel">
+        <h3>🧠 Hindsight memory</h3>
+        <div class="empty-note">Similar past incidents will appear here, with similarity scores.</div>
+      </div>
+      <div class="panel" id="beforePanel">
+        <h3>📋 What happened before</h3>
+        <div class="empty-note">Root cause and fix from the closest historical match.</div>
+      </div>
+      <div class="panel" id="recPanel">
+        <h3>⚡ Recommendation</h3>
+        <div class="empty-note">The agent recommends investigation steps — never false certainty.</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="resolveSection" class="hidden">
+    <h2>✅ Resolve &amp; teach the agent</h2>
+    <div class="panel">
+      <form class="resolve" id="resolveForm">
+        <label>Root cause</label>
+        <textarea id="fRoot" required placeholder="e.g. Database connection pool exhaustion after deploy v3.1.2 increased query fan-out"></textarea>
+        <label>Fix applied</label>
+        <textarea id="fFix" required placeholder="e.g. Raised HikariCP max pool 100 → 300, added leak detection, rolled back v3.1.2"></textarea>
+        <div class="row2">
+          <div><label>Engineer</label><input id="fEng" placeholder="on-call"></div>
+          <div><label>MTTR (minutes)</label><input id="fMttr" type="number" min="1" value="8"></div>
+        </div>
+        <div><button class="primary" id="resolveBtn" type="submit">Store in organizational memory →</button></div>
+      </form>
+      <div class="learned" id="learned"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>🧬 Organizational memory</h2>
+    <div class="panel"><div class="memstrip" id="memStrip"></div></div>
+  </section>
+</main>
+
+<footer>
+  <b style="color:var(--text)">How Hindsight powers this:</b> every resolved incident — error signature, symptoms,
+  root cause, investigation steps, commands, fix, MTTR — is stored as a memory in
+  <code>Hindsight</code>. When a new incident fires, the agent searches that memory for similar
+  past incidents and recommends investigation steps drawn from what actually worked before.
+  Each resolution makes the next incident faster. This static demo runs the memory loop
+  fully in your browser; the <a href="https://github.com/ozrehan/recall-sre" style="color:var(--purple)">Python backend</a>
+  swaps in real Hindsight Cloud with one API key.
+</footer>
+
+<script src="incidents.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
