@@ -414,9 +414,10 @@ async function refreshGithubPanel() {
     $("ghRepoLine").textContent = st.github_repo || "—";
     $("ghRepoLink").href = st.repo_url || "#";
     const gc = st.github_connection || {};
+    const perms = gc.repo_permissions || {};
     if (gc.connected) {
       $("ghStatusText").textContent =
-        "Connected as @" + gc.user + (gc.can_write ? " — can edit & fix" : " — read-only");
+        "Connected as @" + gc.user + (perms.push ? " — can edit & fix" : " — read-only");
     } else {
       $("ghStatusText").textContent = "Not connected: " + (gc.reason || "no token");
     }
