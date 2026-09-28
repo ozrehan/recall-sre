@@ -1,4 +1,4 @@
-/* RecallSRE — ChatGPT-style chat logic */
+/* TraceMind — ChatGPT-style chat logic */
 const $ = (id) => document.getElementById(id);
 
 const SCENARIOS = [
@@ -95,7 +95,7 @@ function addUserMsg(text) {
 function addAgentMsg() {
   const el = document.createElement("div");
   el.className = "msg agent";
-  el.innerHTML = `<div class="avatar">🧠</div><div class="body"></div>`;
+  el.innerHTML = `<div class="avatar"><img src="logo-icon.png" alt="TM"></div><div class="body"></div>`;
   thread().appendChild(el); scrollBottom();
   return el.querySelector(".body");
 }
@@ -267,7 +267,7 @@ function welcome(mode) {
   const msg = mode === "empty"
     ? `<p>🧊 <b>Day 1 — I just joined the team.</b> My memory is blank: fire an incident and I'll tell you honestly that I have no history to draw on.</p>
        <p>Then flip to <b>Day 120</b> and fire the <i>same</i> incident — the difference is organizational memory.</p>`
-    : `<p>👋 I'm <b>RecallSRE</b> — I turn every production incident into organizational memory.</p>
+    : `<p>👋 I'm <b>TraceMind</b> — I turn every production incident into organizational memory.</p>
        <p>Fire an incident (pick one below or describe your own) and I'll search <b>past incidents</b>, show what fixed them, and recommend investigation steps — as evidence-backed hypotheses, never false certainty. When you resolve it, I'll remember the post-mortem.</p>`;
   say(body, msg);
 }
