@@ -539,7 +539,7 @@ def autofill_profile(conn, user_id: int, username=None,
 # ---------- social links ----------
 
 SOCIAL_NETWORKS = ("linkedin", "leetcode", "twitter", "instagram",
-                   "github", "website")
+                   "github", "tiktok", "website")
 
 _SOCIAL_BASE = {
     "linkedin": "https://www.linkedin.com/in/",
@@ -547,6 +547,7 @@ _SOCIAL_BASE = {
     "twitter": "https://x.com/",
     "instagram": "https://www.instagram.com/",
     "github": "https://github.com/",
+    "tiktok": "https://www.tiktok.com/@",
 }
 
 
