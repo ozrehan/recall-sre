@@ -450,6 +450,11 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
 #gsiBtn > div { width: 100% !important; }
 .auth-or { display: flex; align-items: center; gap: 12px; margin: 12px 0; color: var(--muted); font-size: 12.5px; }
 .auth-or::before, .auth-or::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.gh-login-btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%;
+  background: #161b22; color: #fff; border: 1px solid #30363d; border-radius: 10px;
+  padding: 11px 16px; font-size: 15px; font-weight: 600; cursor: pointer; margin: 8px 0 4px; }
+.gh-login-btn:hover { background: #1c2128; }
+.gh-login-btn svg { flex: none; }
 
 /* ---------- login-only panel: hide agent profile + activity until logged in ---------- */
 .actpanel.auth-mode .act-profile,
