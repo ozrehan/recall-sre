@@ -67,11 +67,13 @@ it with a root cause + fix — watch the memory counter grow. Flip the
 
 ```bash
 pip install hindsight-client
-export HINDSIGHT_API_KEY="hsk_..."
-# optional: export HINDSIGHT_URL="https://api.hindsight.vectorize.io"  (default)
+export HINDSIGHT_API_KEY="hsk_..."   # Cloud URL is the default; no HINDSIGHT_URL needed
 python3 scripts/seed_hindsight.py   # loads the 28 historical incidents
 python3 backend/server.py           # badge flips to "memory: hindsight"
 ```
+
+Optional: `GROQ_API_KEY=<redacted> for LLM-synthesized recommendation briefings
+(free tier at https://groq.com). Without it, the agent uses template briefings.
 
 Or self-host: `docker run -p 8888:8888 -e HINDSIGHT_API_LLM_API_KEY=<key> ghcr.io/vectorize-io/hindsight:latest`
 and point `HINDSIGHT_URL=http://localhost:8888` (no API key needed locally).
