@@ -40,6 +40,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.agent.core import IncidentAgent
+from backend import auth as auth_mod
 from backend.integrations import sync as gh_sync
 from backend.integrations import github_issues as gh_api
 from backend.memory.db import IncidentDB
@@ -286,6 +287,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {
                 "investigations": STATE.memory.db.recent_investigations(20),
             })
+        if path == "/api/auth/me":
+            bearer = (self.headers.get("Authorization") or "")
+            uid = auth_mod.verify_token(bearer[7:] if bearer.startswith("Bearer ") else "")
+            db = STATE.memory.db
+            with db._lock, db._conn() as c:
+                user = auth_mod.get_user(c, uid) if uid else None
+            if user:
+                return self._send(200, {"user": user})
+            return self._send(401, {"error": "not logged in"})
         # static files
         rel = path.lstrip("/") or "index.html"
         fpath = os.path.normpath(os.path.join(FRONTEND_DIR, rel))
@@ -345,6 +355,24 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, STATE.clear_database())
             except Exception as e:
                 return self._send(500, {"error": str(e)})
+        if path in ("/api/auth/signup", "/api/auth/login"):
+            try:
+                db = STATE.memory.db
+                with db._lock, db._conn() as c:
+                    if path.endswith("signup"):
+                        out = auth_mod.signup(c, body.get("name", ""),
+                                              body.get("email", ""),
+                                              body.get("password", ""))
+                    else:
+                        out = auth_mod.login(c, body.get("email", ""),
+                                             body.get("password", ""))
+                return self._send(200, out)
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+        if path == "/api/auth/logout":
+            return self._send(200, {"ok": True})
         return self._send(404, {"error": "not found"})
 
     def do_OPTIONS(self):
