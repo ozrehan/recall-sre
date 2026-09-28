@@ -201,4 +201,5 @@ def google_login(conn, id_token: str, client_id: str) -> dict:
             "SELECT id, name, email, created_at FROM users WHERE id=?",
             (cur.lastrowid,)).fetchone()
         user = _public(row)
+    user["provider"] = "google"
     return {"token": issue_token(user["id"]), "user": user}
