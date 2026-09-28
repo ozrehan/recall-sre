@@ -1,3 +1,23 @@
 # Only needed for the real Hindsight backend.
 # The demo server itself is pure stdlib and runs without this.
-hindsight-client>=0.1.0
+# Versions are pinned and wheels are vendored in backend/vendor/wheels/
+# so Render builds with --no-index (no PyPI access needed at build time).
+hindsight-client==0.10.1
+aiohttp==3.14.3
+aiohttp-retry==2.9.1
+pydantic==2.13.5
+pydantic-core==2.46.5
+python-dateutil==2.9.0.post0
+typing-extensions==4.16.0
+urllib3==2.8.0
+aiohappyeyeballs==2.7.1
+aiosignal==1.4.0
+annotated-types==0.8.0
+attrs==26.1.0
+frozenlist==1.8.0
+multidict==6.9.1
+propcache==0.5.4
+six==1.17.0
+typing-inspection==0.4.4
+yarl==1.25.1
+idna==3.20
