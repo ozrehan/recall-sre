@@ -815,6 +815,30 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": str(e)})
             except Exception as e:
                 return self._send(500, {"error": str(e)})
+        if path == "/api/chat":
+            # Plain conversation with Trace (not an incident): answered by the
+            # LLM, grounded in what TraceMind is and does. No alert is fired.
+            msg = (body.get("message") or "").strip()
+            if not msg:
+                return self._send(400, {"error": "empty message"})
+            key = os.environ.get("GROQ_API_KEY")
+            if key:
+                try:
+                    from backend.llm.groq import groq_chat, CHAT_SYSTEM
+                    reply = groq_chat(key, CHAT_SYSTEM, msg[:2000])
+                    if not reply:
+                        raise RuntimeError("empty reply")
+                    return self._send(200, {"reply": reply, "via": "groq"})
+                except Exception:
+                    pass  # fall through to the offline fallback below
+            return self._send(200, {
+                "reply": ("I'm Trace — I turn your repo's incidents into organizational "
+                          "memory. Paste an alert, an error, or a stack trace and I'll "
+                          "investigate it: break it down, search past incidents, and "
+                          "suggest a fix. You can also connect a GitHub repo and I'll "
+                          "watch its CI runs for you."),
+                "via": "fallback",
+            })
         if path == "/api/investigate":
             alert = body.get("alert", {})
             try:
