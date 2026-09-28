@@ -510,7 +510,9 @@ def update_profile(conn, user_id: int, name=None, username=None,
 
 def autofill_profile(conn, user_id: int, username=None,
                      avatar_url=None) -> None:
-    """Fill empty username/avatar from an OAuth provider (best effort)."""
+    """Fill username/avatar from an OAuth provider (best effort).
+    The provider's avatar always wins, unless the user manually uploaded
+    their own picture (stored as a data: URI) — a manual upload is kept."""
     try:
         ensure_schema(conn)
         row = conn.execute(
@@ -525,7 +527,8 @@ def autofill_profile(conn, user_id: int, username=None,
             if not dup:
                 sets.append("username=?")
                 params.append(username.lower())
-        if not row[1] and avatar_url:
+        cur_ava = (row[1] or "")
+        if avatar_url and (not cur_ava or not cur_ava.startswith("data:")):
             sets.append("avatar_url=?")
             params.append(avatar_url[:2000])
         if sets:
