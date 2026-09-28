@@ -42,6 +42,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.agent.core import IncidentAgent
 from backend import auth as auth_mod
 from backend.integrations import sync as gh_sync
+from backend.plugins import (
+    is_enabled as _plugin_enabled,
+    list_plugins as _list_plugins,
+    set_enabled as _set_plugin_enabled,
+    set_setting as _set_plugin_setting,
+)
+from backend.plugins import sentinel as _sentinel
+from backend.plugins import autofix as _autofix
 from backend.integrations import github_issues as gh_api
 from backend.memory.db import IncidentDB
 from backend.memory.hybrid_store import HybridMemoryStore
@@ -109,6 +117,7 @@ class State:
         except ValueError:
             self.sync_minutes = SYNC_MINUTES
         self.sync_status: dict = {"last": None, "running": False}
+        self.sentinel_status: dict = {"running": False}
 
     def set_github_repo(self, repo: str) -> dict:
         """Change the watched repo at runtime (persisted in SQLite)."""
@@ -166,6 +175,56 @@ class State:
         finally:
             self.sync_status["running"] = False
 
+
+    # ---- plugins ------------------------------------------------------
+    def plugins_list(self) -> list:
+        return _list_plugins(self.memory.db)
+
+    def plugin_toggle(self, plugin_id: str, enabled: bool) -> dict:
+        return _set_plugin_enabled(self.memory.db, plugin_id, enabled)
+
+    def plugins_status(self) -> dict:
+        db = self.memory.db
+        return {
+            "plugins": self.plugins_list(),
+            "sentinel": {
+                "enabled": _plugin_enabled(db, "sentinel"),
+                "interval_minutes": _sentinel.scan_interval_minutes(db),
+                "last_run": db.meta_get("sentinel_last_run"),
+                "last_result": _sentinel.last_result(db),
+                "running": bool(self.sentinel_status.get("running")),
+            },
+            "autofix": {
+                "enabled": _plugin_enabled(db, "autofix"),
+                "last": db.meta_get("autofix_last"),
+            },
+            "github_repo": self.github_repo,
+            "repo_url": f"https://github.com/{self.github_repo}",
+        }
+
+    def set_sentinel_minutes(self, minutes: int) -> dict:
+        minutes = max(5, min(int(minutes), 1440))
+        _set_plugin_setting(self.memory.db, "sentinel_minutes", str(minutes))
+        return {"sentinel_minutes": minutes}
+
+    def sentinel_scan_now(self) -> dict:
+        """One sentinel pass + auto-fix attempts; safe from any thread."""
+        if self.sentinel_status.get("running"):
+            return {"error": "sentinel scan already running"}
+        self.sentinel_status["running"] = True
+        try:
+            result = _sentinel.scan_once(self)
+            fixes = []
+            for p in result.get("problems", []):
+                try:
+                    fixes.append(_autofix.attempt_fix(self, p))
+                except Exception as e:
+                    fixes.append({"error": str(e)[:120]})
+            result["autofix"] = fixes
+            return result
+        finally:
+            self.sentinel_status["running"] = False
+
     def github_status(self) -> dict:
         db = self.memory.db
         counts = db.github_sync_counts(self.github_repo)
@@ -197,6 +256,23 @@ def _sync_loop():
             STATE.sync_github_now()
         except Exception as e:
             print(f"[sync] periodic sync failed: {e}")
+
+
+def _sentinel_loop():
+    """Background: repo health scan every N minutes, even with site closed."""
+    import time as _t
+    _t.sleep(60)  # let boot settle
+    while True:
+        try:
+            if _plugin_enabled(STATE.memory.db, "sentinel"):
+                STATE.sentinel_scan_now()
+        except Exception as e:
+            print(f"[sentinel] scan failed: {e}")
+        try:
+            mins = _sentinel.scan_interval_minutes(STATE.memory.db)
+        except Exception:
+            mins = 15
+        _t.sleep(max(mins, 5) * 60)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -256,6 +332,10 @@ class Handler(BaseHTTPRequestHandler):
             })
         if path == "/api/integrations/github":
             return self._send(200, STATE.github_status())
+        if path == "/api/plugins":
+            return self._send(200, {"plugins": STATE.plugins_list()})
+        if path == "/api/plugins/status":
+            return self._send(200, STATE.plugins_status())
         if path == "/api/settings":
             return self._send(200, STATE.get_settings())
         if path == "/api/db/stats":
@@ -352,6 +432,24 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, STATE.get_settings())
             except Exception as e:
                 return self._send(500, {"error": str(e)})
+        if path.startswith("/api/plugins/toggle/"):
+            try:
+                pid = path[len("/api/plugins/toggle/"):]
+                return self._send(200, STATE.plugin_toggle(
+                    pid, bool(body.get("enabled"))))
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+        if path == "/api/plugins/scan":
+            try:
+                return self._send(200, STATE.sentinel_scan_now())
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+        if path == "/api/plugins/interval":
+            try:
+                return self._send(200, STATE.set_sentinel_minutes(
+                    body.get("minutes", 15)))
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
         if path == "/api/settings/clear-db":
             try:
                 return self._send(200, STATE.clear_database())
@@ -399,6 +497,8 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     threading.Thread(target=_sync_loop, daemon=True,
                      name="github-sync").start()
+    threading.Thread(target=_sentinel_loop, daemon=True,
+                     name="repo-sentinel").start()
     port = int(os.environ.get("PORT", 8080))
     srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"TraceMind on http://localhost:{port} "
