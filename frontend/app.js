@@ -28,7 +28,7 @@ function rememberUser(u) {
 function renderAuthSlot() {
   const slot = $("authSlot");
   if (authUser) {
-    slot.innerHTML = `<button class="uavatar" id="avatarBtn" title="${esc(authUser.name)}">${esc(initialOf(authUser.name))}</button>`;
+    slot.innerHTML = `<button class="uavatar trace-avatar" id="avatarBtn" title="${esc(authUser.name)} — profile & activity"><video src="profile.mp4" autoplay muted loop playsinline></video></button>`;
   } else {
     slot.innerHTML = `<button class="loginbtn" id="loginBtn">Log in</button>`;
   }
@@ -357,6 +357,7 @@ function logActivity(type, title, desc) {
   items.unshift({ type, title, desc, ts: Date.now() });
   try { localStorage.setItem(ACT_KEY, JSON.stringify(items.slice(0, 100))); } catch (e) {}
   renderActivity();
+  renderRecents();
 }
 function fmtTime(ts) {
   const d = new Date(ts);
@@ -390,7 +391,6 @@ async function investigate(alert, userLabel) {
   if (busy) return; busy = true;
   $("chips").style.display = "none";
   addUserMsg(userLabel || `🚨 ${alert.title} — ${alert.service} · ${alert.severity}`);
-  addHistory(alert);
   logActivity("fired", alert.title, `${alert.service} · ${alert.severity} — investigation started`);
   const body = addAgentMsg();
   const t1 = addTyping(body);
@@ -425,35 +425,136 @@ function alertFromText(text) {
   };
 }
 
-/* ---------- history ---------- */
-function addHistory(alert) {
-  const empty = document.querySelector(".history-empty");
-  if (empty) empty.remove();
-  const b = document.createElement("button");
-  b.className = "hist-item";
-  b.innerHTML = `<span class="sevdot"></span><span class="t">${esc(alert.title)}</span>`;
-  b.title = alert.title;
-  b.onclick = () => investigate(alert);
-  $("historyList").prepend(b);
+/* ---------- sidebar: recents + pinned ---------- */
+const PIN_KEY = "tm_pinned";
+const getPinned = () => { try { return JSON.parse(localStorage.getItem(PIN_KEY) || "[]"); } catch (e) { return []; } };
+function togglePin(ts) {
+  let p = getPinned();
+  p = p.includes(ts) ? p.filter((x) => x !== ts) : [ts, ...p].slice(0, 30);
+  try { localStorage.setItem(PIN_KEY, JSON.stringify(p)); } catch (e) {}
+  renderRecents();
+}
+function renderRecents() {
+  const pl = $("pinnedList"), rl = $("recentsList");
+  if (!pl || !rl) return;
+  const q = (($("sbSearchInput") || {}).value || "").toLowerCase().trim();
+  const pinned = getPinned();
+  const items = getActivity().filter((a) => a.type === "fired");
+  const match = (a) => !q || (a.title || "").toLowerCase().includes(q);
+  const row = (a, isPinned) => `
+    <div class="sb-row" data-ts="${a.ts}">
+      <button class="sb-row-main" title="${esc(a.title)}"><span class="sb-row-ico">💬</span><span class="sb-row-t">${esc(a.title)}</span></button>
+      <button class="sb-pin" title="${isPinned ? "Unpin" : "Pin"}">${isPinned ? "📌" : "📍"}</button>
+    </div>`;
+  const pinnedItems = items.filter((a) => pinned.includes(a.ts) && match(a));
+  const recentItems = items.filter((a) => !pinned.includes(a.ts) && match(a)).slice(0, 25);
+  pl.innerHTML = pinnedItems.length ? pinnedItems.map((a) => row(a, true)).join("")
+    : `<div class="sb-empty">Nothing pinned yet.</div>`;
+  rl.innerHTML = recentItems.length ? recentItems.map((a) => row(a, false)).join("")
+    : `<div class="sb-empty">No incidents yet.<br>Fire one from the chat.</div>`;
+  pl.querySelectorAll(".sb-row").forEach(wireSbRow);
+  rl.querySelectorAll(".sb-row").forEach(wireSbRow);
+}
+function wireSbRow(r) {
+  const ts = +r.dataset.ts;
+  const a = getActivity().find((x) => x.ts === ts);
+  r.querySelector(".sb-row-main").addEventListener("click", () => {
+    if (!a || busy) return;
+    investigate(alertFromText(a.title), a.title);
+    document.body.classList.remove("side-open");
+  });
+  r.querySelector(".sb-pin").addEventListener("click", (e) => { e.stopPropagation(); togglePin(ts); });
 }
 
-/* ---------- memory sidebar ---------- */
+/* ---------- sidebar info modals ---------- */
+function openInfo(title, bodyHTML) {
+  $("infoTitle").textContent = title;
+  $("infoBody").innerHTML = bodyHTML || `<p class="info-hint">Loading…</p>`;
+  $("infoModal").classList.add("open");
+  $("infoScrim").classList.add("show");
+}
+function closeInfo() {
+  $("infoModal").classList.remove("open");
+  $("infoScrim").classList.remove("show");
+}
+async function openIncidentsModal() {
+  openInfo("Incidents");
+  try {
+    const d = await api("/api/incidents");
+    const list = d.incidents || [];
+    $("infoBody").innerHTML = list.length ? list.map((i, idx) => `
+      <button class="info-row" data-i="${idx}">
+        <span class="sevtag">${esc((i.severity || "medium").toUpperCase())}</span>
+        <span class="info-row-t">${esc(i.title)}</span>
+        <span class="info-row-s">${esc(i.service || "")}</span>
+      </button>`).join("")
+      : `<p class="info-hint">No open incidents right now. They sync from GitHub issues — check Scheduled → Sync now.</p>`;
+    $("infoBody").querySelectorAll(".info-row").forEach((b) =>
+      b.addEventListener("click", () => {
+        closeInfo();
+        document.body.classList.remove("side-open");
+        investigate(alertFromIncident(list[+b.dataset.i]));
+      }));
+  } catch (e) { $("infoBody").innerHTML = `<p class="info-hint">Couldn't load incidents.</p>`; }
+}
+async function openMemoryModal() {
+  openInfo("Memory");
+  try {
+    const [h, s] = await Promise.all([api("/api/health"), api("/api/db/stats").catch(() => null)]);
+    $("infoBody").innerHTML = `
+      <div class="membox">
+        <div class="memrow"><span>incidents remembered</span><b>${h.memory_size ?? "—"}</b></div>
+        <div class="memrow"><span>semantic backend</span><b>${esc(h.backend || "—")}</b></div>
+        <div class="memrow"><span>database</span><b>sqlite · ${s ? s.total_incidents : "—"}</b></div>
+        <div class="memrow"><span>avg resolution</span><b>${s && s.avg_mttr_minutes != null ? Math.round(s.avg_mttr_minutes) + " min" : "—"}</b></div>
+        <div class="memrow"><span>services</span><b>${s ? (Object.keys(s.by_service || {}).length || "—") : "—"}</b></div>
+      </div>
+      <p class="info-hint">Every resolved incident is retained — in the database and in semantic memory — so the next similar incident starts smarter.</p>`;
+  } catch (e) { $("infoBody").innerHTML = `<p class="info-hint">Couldn't load memory stats.</p>`; }
+}
+async function openDbModal() {
+  openInfo("Database");
+  try {
+    const d = await api("/api/db/incidents?limit=50");
+    const list = d.incidents || [];
+    $("infoBody").innerHTML = (list.length ? `<p class="info-hint">${d.total} incidents stored locally.</p>` : "") +
+      (list.length ? list.map((i) => {
+        const resolved = !!(i.resolved_at || i.status === "resolved");
+        return `<div class="info-row" style="cursor:default">
+          <span class="sevtag">${esc((i.severity || "medium").toUpperCase())}</span>
+          <span class="info-row-t">${esc(i.title || i.id)}</span>
+          <span class="info-row-s">${resolved ? "✓ resolved" : "● open"}</span>
+        </div>`;
+      }).join("") : `<p class="info-hint">Database is empty. Sync from GitHub to fill it.</p>`);
+  } catch (e) { $("infoBody").innerHTML = `<p class="info-hint">Couldn't load the database.</p>`; }
+}
+async function openScheduledModal() {
+  openInfo("Scheduled");
+  try {
+    const s = await api("/api/settings");
+    $("infoBody").innerHTML = `
+      <div class="info-kv"><span>repository</span><b>${esc(s.github_repo || "—")}</b></div>
+      <div class="info-kv"><span>sync every</span><b>${s.sync_minutes || 5} min</b></div>
+      <div class="info-kv"><span>last sync</span><b>${s.last_sync_at ? new Date(s.last_sync_at).toLocaleString() : "never"}</b></div>
+      <div class="info-kv"><span>token</span><b>${s.github_token_configured ? "connected" : "not set"}</b></div>
+      <button class="btn wide" id="infoSyncNow">Sync now</button>
+      <p class="info-hint">TraceMind polls the repo on this schedule. New and closed issues sync automatically — closed ones become resolved incidents.</p>`;
+    $("infoSyncNow").addEventListener("click", async () => {
+      const b = $("infoSyncNow");
+      b.disabled = true; b.textContent = "Syncing…";
+      await api("/api/integrations/github/sync", { method: "POST" });
+      b.disabled = false; b.textContent = "Sync now";
+      loadIncidents(); openScheduledModal();
+    });
+  } catch (e) { $("infoBody").innerHTML = `<p class="info-hint">Couldn't load schedule info.</p>`; }
+}
+
+/* ---------- memory (cached for sidebar modals) ---------- */
+let memCache = {};
 async function refreshMemory() {
   try {
     const h = await api("/api/health");
-    $("memCount").textContent = h.memory_size;
-    $("memBackend").textContent = h.backend;
-    $("backendBadge").innerHTML = `memory: <b>${esc(h.backend)}</b>`;
-    try {
-      const s = await api("/api/db/stats");
-      $("memMttr").textContent = s.avg_mttr_minutes != null ? Math.round(s.avg_mttr_minutes) + " min" : "—";
-      $("memSvc").textContent = Object.keys(s.by_service || {}).length || "—";
-      $("memDb").textContent = `sqlite · ${s.total_incidents}`;
-    } catch (e) { $("memDb").textContent = "—"; }
-    const g = h.github || {};
-    $("ghPillText").textContent = g.repo
-      ? `${g.repo}${g.last_sync_at ? " · synced " + relTime(g.last_sync_at) : " · syncing…"}`
-      : "no repo";
+    memCache = { backend: h.backend, memory_size: h.memory_size, github: h.github || {} };
   } catch (e) { /* offline */ }
 }
 function relTime(iso) {
@@ -585,7 +686,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     googleClientId = s.google_client_id || "";
   } catch (e) {}
   await authMe();
-  renderAuthSlot(); renderActAuth();
+  renderAuthSlot(); renderActAuth(); renderRecents();
   let sheetOff = false;
   try { sheetOff = !!sessionStorage.getItem("tm_sheet_off"); } catch (e) {}
   if (!authUser && !sheetOff) openLoginSheet();
@@ -612,7 +713,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   $("burger").addEventListener("click", () => document.body.classList.toggle("side-open"));
   $("scrim").addEventListener("click", () => document.body.classList.remove("side-open"));
-  $("settingsBtn").addEventListener("click", () => setModal(true));
+  $("navIncidents").addEventListener("click", () => openIncidentsModal());
+  $("navMemory").addEventListener("click", () => openMemoryModal());
+  $("navDb").addEventListener("click", () => openDbModal());
+  $("navScheduled").addEventListener("click", () => openScheduledModal());
+  $("navSettings").addEventListener("click", () => setModal(true));
+  $("infoClose").addEventListener("click", closeInfo);
+  $("infoScrim").addEventListener("click", closeInfo);
+  $("sbSearchBtn").addEventListener("click", () => {
+    const box = $("sbSearchBox");
+    box.hidden = !box.hidden;
+    if (!box.hidden) $("sbSearchInput").focus();
+  });
+  $("sbSearchInput").addEventListener("input", renderRecents);
   $("authSlot").addEventListener("click", () => {
     if (authUser) { renderActAuth(); renderActivity(); setActPanel(true); }
     else openLoginSheet();
@@ -626,7 +739,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.querySelectorAll("#actTabs button").forEach((x) => x.classList.toggle("active", x === b));
     renderActivity();
   });
-  $("ghPill").addEventListener("click", () => setModal(true));
   $("setClose").addEventListener("click", () => setModal(false));
   $("setScrim").addEventListener("click", () => setModal(false));
   $("setSaveBtn").addEventListener("click", saveSettings);
