@@ -1,6 +1,6 @@
 # TraceMind
 
-**Live demo:** https://recall-sre.onrender.com
+**Live demo:** https://tracemind-szuq.onrender.com
 
 **Turn incidents into insight.**
 
