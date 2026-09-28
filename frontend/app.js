@@ -1,77 +1,7 @@
 /* TraceMind — ChatGPT-style chat logic */
 const $ = (id) => document.getElementById(id);
 
-const SCENARIOS = [
-  {
-    key: "pool", sev: "CRITICAL", title: "payment-service returning 500s",
-    desc: "Error rate 34%, p99 9s, deploy v3.1.2 went out 22 min ago.",
-    alert: {
-      title: "payment-service returning 500 errors",
-      service: "payment-service", severity: "critical",
-      error_signature: "HTTP 500 spike + 'remaining connection slots are reserved' in postgres logs",
-      symptoms: [
-        "p99 latency jumped from 180ms to 9.1s",
-        "error rate 34% on /api/v1/pay/charge",
-        "postgres logs: 'remaining connection slots are reserved for non-replication superuser connections'",
-        "HikariPool - Connection is not available, request timed out after 30000ms",
-      ],
-      logs_snippet: "2026-09-28T05:41:02Z ERROR [HikariPool-1 housekeeper] HikariPool-1 - Connection is not available, request timed out after 30000ms.",
-      deployment: { version: "v3.1.2", deployed_at: "22 minutes ago" },
-    },
-  },
-  {
-    key: "flag", sev: "HIGH", title: "checkout 404s after flag rollout",
-    desc: "Checkout 99% → 0% at exactly 14:00 UTC, flag hit 100%.",
-    alert: {
-      title: "checkout failing after feature flag rollout",
-      service: "order-service", severity: "high",
-      error_signature: "100% of checkout requests failing with PricingV2Exception after flag rollout",
-      symptoms: [
-        "checkout success rate 99.1% → 0% at exactly 14:00 UTC",
-        "flag express-checkout rolled to 100% at 14:00 UTC",
-        "PricingV2Exception: endpoint /v2/price not found (404)",
-      ],
-      logs_snippet: "2026-09-28T14:00:31Z ERROR [http-nio-8080-exec-55] PricingV2Exception: endpoint /v2/price not found (404)",
-      deployment: { version: "v2.9.0", deployed_at: "3 days ago" },
-    },
-  },
-  {
-    key: "redis", sev: "HIGH", title: "search-service cache collapse",
-    desc: "Cache hit 96% → 11%, pool exhausted, DB CPU 92%.",
-    alert: {
-      title: "search-service latency spike, cache failing",
-      service: "search-service", severity: "high",
-      error_signature: "redis.clients.jedis.exceptions.JedisConnectionException: Could not get a resource from the pool",
-      symptoms: [
-        "cache hit rate collapsed 96% → 11%",
-        "p95 latency 240ms → 3.1s",
-        "Jedis pool exhausted: 500/500 connections borrowed",
-        "DB CPU spiked to 92% from cache-miss thundering herd",
-      ],
-      logs_snippet: "2026-09-28T06:12:44Z ERROR redis.clients.jedis.exceptions.JedisConnectionException: Could not get a resource from the pool",
-      deployment: { version: "v2.6.2", deployed_at: "2 days ago" },
-    },
-  },
-  {
-    key: "novel", sev: "MEDIUM", title: "websocket gateway dropping connections",
-    desc: "Unfamiliar signature — watch the agent admit it has no history.",
-    alert: {
-      title: "websocket gateway dropping idle connections",
-      service: "api-gateway", severity: "medium",
-      error_signature: "WebSocket close code 1006 spikes on idle connections > 5min",
-      symptoms: [
-        "websocket close code 1006 rate up 40x",
-        "only connections idle > 5 minutes affected",
-        "no deployment in the last 48 hours",
-        "LB access logs show RST from client side",
-      ],
-      logs_snippet: "2026-09-28T07:20:11Z WARN [ws-gateway] close code 1006 for 1,204 idle sessions in 60s window",
-      deployment: { version: "v3.0.0", deployed_at: "3 days ago" },
-    },
-  },
-];
-
-let seedIncidents = [];
+let openIncidents = [];
 let busy = false;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -114,19 +44,20 @@ const say = (body, html) => { const p = document.createElement("div"); p.innerHT
 
 /* ---------- cards ---------- */
 function incidentCard(alert) {
+  const gh = alert.github || {};
   return `<div class="card"><h5>🚨 Live incident</h5>
     <dl class="kv">
       <dt>service</dt><dd>${esc(alert.service)}</dd>
       <dt>severity</dt><dd class="alert">${esc(alert.severity)}</dd>
-      <dt>signature</dt><dd>${esc(alert.error_signature)}</dd>
-      <dt>deployed</dt><dd>${esc(alert.deployment.version)} · ${esc(alert.deployment.deployed_at)}</dd>
+      ${alert.error_signature ? `<dt>signature</dt><dd>${esc(alert.error_signature)}</dd>` : ""}
+      ${gh.url ? `<dt>issue</dt><dd><a href="${esc(gh.url)}" target="_blank" rel="noopener">#${esc(gh.number)} ↗</a></dd>` : ""}
     </dl>
-    <div class="logbox">${esc(alert.logs_snippet)}</div></div>`;
+    ${alert.logs_snippet ? `<div class="logbox">${esc(alert.logs_snippet)}</div>` : ""}</div>`;
 }
 function matchesCard(matches, scoreLabel) {
   if (!matches.length)
     return `<div class="card"><h5>🧠 Memory search</h5>
-      <p>No similar past incidents found. Day 1: the agent just joined the team and has <b>no history</b> — the recommendation below says so honestly instead of guessing.</p></div>`;
+      <p>No similar past incidents in memory yet — the recommendation below says so honestly instead of guessing. Resolve this incident and it becomes the first memory of its kind.</p></div>`;
   const cards = matches.map((m, i) => `
     <div class="match${i === 0 ? " top" : ""}">
       <div class="row"><div><span class="id">${esc(m.id)}</span></div>
@@ -188,48 +119,8 @@ function resolveCard(draft, onDone) {
     if (res.error) { btn.textContent = "Error — try again"; return; }
     wrap.innerHTML = `<div class="learned-ok">🧠 <b>Learned.</b> Stored as <b>${esc(res.id)}</b> — memory now holds <b>${res.memory_size}</b> incidents. Fire a similar incident and watch the agent recall this one.</div>`;
     scrollBottom(); refreshMemory(); onDone && onDone(res);
-    logActivity("resolved", draft.title || "Incident resolved",
-      `Root cause stored in memory — ${res.memory_size} incidents remembered`);
   };
   return wrap;
-}
-
-/* ---------- activity panel ---------- */
-const ACT_KEY = "tm_activity_v1";
-function getActivity() {
-  try { return JSON.parse(localStorage.getItem(ACT_KEY) || "[]"); } catch (e) { return []; }
-}
-function logActivity(type, title, desc) {
-  const items = getActivity();
-  items.unshift({ type, title, desc, ts: Date.now() });
-  try { localStorage.setItem(ACT_KEY, JSON.stringify(items.slice(0, 100))); } catch (e) {}
-  renderActivity();
-}
-function fmtTime(ts) {
-  const d = new Date(ts);
-  let h = d.getHours(), m = String(d.getMinutes()).padStart(2, "0");
-  const ap = h >= 12 ? "pm" : "am"; h = h % 12 || 12;
-  return `${h}:${m} ${ap}`;
-}
-const ACT_ICON = { fired: "🚨", resolved: "✓" };
-let actFilter = "all";
-function renderActivity() {
-  const list = $("actList"); if (!list) return;
-  const items = getActivity().filter((a) => actFilter === "all" || a.type === actFilter);
-  if (!items.length) {
-    list.innerHTML = `<div class="act-empty">No activity yet.<br>Fire an incident to get started.</div>`;
-    return;
-  }
-  list.innerHTML = items.map((a) => `
-    <div class="act-item">
-      <div class="act-ico">${ACT_ICON[a.type] || "•"}</div>
-      <div><b>${esc(a.title)}</b><p>${esc(a.desc)}</p>
-      <span class="act-time">${fmtTime(a.ts)}</span></div>
-    </div>`).join("");
-}
-function setActPanel(open) {
-  $("actPanel").classList.toggle("open", open);
-  $("actScrim").classList.toggle("show", open);
 }
 
 /* ---------- flow ---------- */
@@ -238,7 +129,6 @@ async function investigate(alert, userLabel) {
   $("chips").style.display = "none";
   addUserMsg(userLabel || `🚨 ${alert.title} — ${alert.service} · ${alert.severity}`);
   addHistory(alert);
-  logActivity("fired", alert.title, `${alert.service} · ${alert.severity} — investigation started`);
   const body = addAgentMsg();
   const t1 = addTyping(body);
   const res = await api("/api/investigate", { method: "POST", body: JSON.stringify({ alert }) });
@@ -291,41 +181,100 @@ async function refreshMemory() {
     $("memCount").textContent = h.memory_size;
     $("memBackend").textContent = h.backend;
     $("backendBadge").innerHTML = `memory: <b>${esc(h.backend)}</b>`;
-    document.querySelectorAll(".timetravel button").forEach((b) =>
-      b.classList.toggle("active", b.dataset.mode === h.mode));
-    const m = await api("/api/memory");
-    const mttrs = seedIncidents.map((i) => i.mttr_minutes).filter((x) => typeof x === "number");
-    $("memMttr").textContent = mttrs.length ? Math.round(mttrs.reduce((a, b) => a + b, 0) / mttrs.length) + " min" : "—";
-    $("memSvc").textContent = new Set(seedIncidents.map((i) => i.service)).size || "—";
     try {
       const s = await api("/api/db/stats");
+      $("memMttr").textContent = s.avg_mttr_minutes != null ? Math.round(s.avg_mttr_minutes) + " min" : "—";
+      $("memSvc").textContent = Object.keys(s.by_service || {}).length || "—";
       $("memDb").textContent = `sqlite · ${s.total_incidents}`;
     } catch (e) { $("memDb").textContent = "—"; }
+    const g = h.github || {};
+    $("ghPillText").textContent = g.repo
+      ? `${g.repo}${g.last_sync_at ? " · synced " + relTime(g.last_sync_at) : " · syncing…"}`
+      : "no repo";
   } catch (e) { /* offline */ }
 }
+function relTime(iso) {
+  try {
+    const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60) return "just now";
+    if (s < 3600) return Math.floor(s / 60) + "m ago";
+    if (s < 86400) return Math.floor(s / 3600) + "h ago";
+    return Math.floor(s / 86400) + "d ago";
+  } catch (e) { return ""; }
+}
 
-/* ---------- mode / new chat ---------- */
-function welcome(mode) {
+/* ---------- welcome / new chat ---------- */
+function welcome() {
   $("chat").innerHTML = "";
   $("chips").style.display = "";
   const body = addAgentMsg();
-  const msg = mode === "empty"
-    ? `<p>🧊 <b>Day 1 — I just joined the team.</b> My memory is blank: fire an incident and I'll tell you honestly that I have no history to draw on.</p>
-       <p>Then flip to <b>Day 120</b> and fire the <i>same</i> incident — the difference is organizational memory.</p>`
-    : `<p>👋 I'm <b>TraceMind</b> — I turn every production incident into organizational memory.</p>
-       <p>Fire an incident (pick one below or describe your own) and I'll search <b>past incidents</b>, show what fixed them, and recommend investigation steps — as evidence-backed hypotheses, never false certainty. When you resolve it, I'll remember the post-mortem.</p>`;
-  say(body, msg);
+  say(body, `<p>👋 I'm <b>TraceMind</b> — I turn your repo's GitHub issues into organizational memory.</p>
+    <p>Open issues are synced as live incidents. Pick one below (or describe your own) and I'll search <b>past incidents</b>, show what fixed them, and recommend investigation steps — as evidence-backed hypotheses, never false certainty. When you resolve it, I'll remember the post-mortem, so the next similar issue starts smarter.</p>`);
 }
 function renderChips() {
-  $("chips").innerHTML = SCENARIOS.map((s, i) =>
-    `<button class="chip" data-i="${i}"><span class="sevtag">${s.sev}</span>${esc(s.title)}</button>`).join("");
+  const open = openIncidents.filter((i) => i.outcome === "open").slice(0, 8);
+  if (!open.length) {
+    $("chips").innerHTML = `<span class="chip-hint">No open issues synced yet — check Settings → Sync now, or describe an incident below.</span>`;
+    return;
+  }
+  $("chips").innerHTML = open.map((i, idx) =>
+    `<button class="chip" data-i="${idx}"><span class="sevtag">${esc((i.severity || "medium").toUpperCase())}</span>${esc(i.title)}</button>`).join("");
   document.querySelectorAll(".chip").forEach((c) =>
-    c.addEventListener("click", () => investigate(SCENARIOS[+c.dataset.i].alert)));
+    c.addEventListener("click", () => investigate(alertFromIncident(open[+c.dataset.i]))));
 }
-async function setMode(mode) {
-  if (busy) return;
-  await api("/api/mode", { method: "POST", body: JSON.stringify({ mode }) });
-  welcome(mode); refreshMemory();
+function alertFromIncident(i) {
+  return {
+    title: i.title, service: i.service || "unknown",
+    severity: i.severity || "medium",
+    error_signature: "", symptoms: [i.title],
+    logs_snippet: "", deployment: {},
+    github: i.github || {},
+  };
+}
+async function loadIncidents() {
+  try {
+    const d = await api("/api/incidents");
+    openIncidents = d.incidents || [];
+  } catch (e) { openIncidents = []; }
+  renderChips();
+}
+
+/* ---------- settings ---------- */
+function setModal(open) {
+  $("setModal").classList.toggle("open", open);
+  $("setScrim").classList.toggle("show", open);
+  if (open) loadSettings();
+}
+async function loadSettings() {
+  try {
+    const s = await api("/api/settings");
+    $("setRepo").value = s.github_repo || "";
+    $("setSyncMin").value = s.sync_minutes || 5;
+    $("setLastSync").textContent = s.last_sync_at
+      ? new Date(s.last_sync_at).toLocaleString() : "never";
+    $("setTokenBadge").textContent = s.github_token_configured ? "Connected" : "Not set";
+    $("setTokenBadge").classList.toggle("on", !!s.github_token_configured);
+    $("setBackendBadge").textContent = s.memory_backend || "—";
+    $("setBankDesc").textContent = s.hindsight_bank
+      ? `Hindsight bank "${s.hindsight_bank}" — every resolved incident is retained here.`
+      : "Local TF-IDF memory — set HINDSIGHT_API_KEY for durable cloud memory.";
+    $("setMemCount").textContent = s.incidents_remembered ?? "—";
+    $("setGroqBadge").textContent = s.groq_configured ? "Connected" : "Not set";
+    $("setGroqBadge").classList.toggle("on", !!s.groq_configured);
+  } catch (e) { /* offline */ }
+}
+async function saveSettings() {
+  const repo = $("setRepo").value.trim();
+  const mins = parseInt($("setSyncMin").value, 10);
+  const btn = $("setSaveBtn");
+  const payload = {};
+  if (repo) payload.github_repo = repo;
+  if (mins >= 1 && mins <= 1440) payload.sync_minutes = mins;
+  btn.disabled = true; btn.textContent = "Saving…";
+  const res = await api("/api/settings", { method: "POST", body: JSON.stringify(payload) });
+  btn.disabled = false; btn.textContent = "Save";
+  if (res.error) { btn.textContent = res.error; setTimeout(() => btn.textContent = "Save", 1800); return; }
+  loadSettings(); refreshMemory(); loadIncidents();
 }
 
 /* ---------- composer ---------- */
@@ -337,10 +286,10 @@ function send() {
   investigate(alertFromText(text), text);
 }
 document.addEventListener("DOMContentLoaded", async () => {
-  renderChips();
-  welcome("trained");
-  try { const d = await api("/api/incidents"); seedIncidents = d.incidents || []; } catch (e) {}
+  welcome();
+  loadIncidents();
   refreshMemory();
+  setInterval(refreshMemory, 60000);
   const inp = $("input");
   inp.addEventListener("input", () => {
     inp.style.height = "auto"; inp.style.height = Math.min(inp.scrollHeight, 160) + "px";
@@ -353,20 +302,33 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("sendBtn").disabled = true;
   $("newChatBtn").addEventListener("click", () => {
     if (busy) return;
-    welcome(document.querySelector(".timetravel button.active").dataset.mode);
+    welcome(); loadIncidents();
     document.body.classList.remove("side-open");
   });
-  document.querySelectorAll(".timetravel button").forEach((b) =>
-    b.addEventListener("click", () => setMode(b.dataset.mode)));
   $("burger").addEventListener("click", () => document.body.classList.toggle("side-open"));
   $("scrim").addEventListener("click", () => document.body.classList.remove("side-open"));
-  $("activityBtn").addEventListener("click", () => { renderActivity(); setActPanel(true); });
-  $("actClose").addEventListener("click", () => setActPanel(false));
-  $("actScrim").addEventListener("click", () => setActPanel(false));
-  document.querySelectorAll("#actTabs button").forEach((b) =>
-    b.addEventListener("click", () => {
-      actFilter = b.dataset.f;
-      document.querySelectorAll("#actTabs button").forEach((x) => x.classList.toggle("active", x === b));
-      renderActivity();
-    }));
+  $("settingsBtn").addEventListener("click", () => setModal(true));
+  $("ghPill").addEventListener("click", () => setModal(true));
+  $("setClose").addEventListener("click", () => setModal(false));
+  $("setScrim").addEventListener("click", () => setModal(false));
+  $("setSaveBtn").addEventListener("click", saveSettings);
+  $("setSyncNow").addEventListener("click", async () => {
+    const b = $("setSyncNow");
+    b.disabled = true; b.textContent = "Syncing…";
+    await api("/api/integrations/github/sync", { method: "POST" });
+    b.disabled = false; b.textContent = "Sync now";
+    loadSettings(); refreshMemory(); loadIncidents();
+  });
+  $("setClearDb").addEventListener("click", async () => {
+    const b = $("setClearDb");
+    if (b.dataset.armed) {
+      b.disabled = true; b.textContent = "Clearing…";
+      await api("/api/settings/clear-db", { method: "POST" });
+      delete b.dataset.armed; b.disabled = false; b.textContent = "Clear";
+      loadSettings(); refreshMemory(); loadIncidents(); welcome();
+    } else {
+      b.dataset.armed = "1"; b.textContent = "Click again to confirm";
+      setTimeout(() => { delete b.dataset.armed; b.textContent = "Clear"; }, 3000);
+    }
+  });
 });
