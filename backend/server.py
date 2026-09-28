@@ -129,6 +129,42 @@ class State:
         self.memory.db.meta_set("github_repo", repo)
         return {"repo": repo}
 
+    @property
+    def github_repos(self) -> list:
+        """All connected repos (migrates legacy single-repo setting)."""
+        raw = self.memory.db.meta_get("github_repos")
+        if raw:
+            try:
+                repos = json.loads(raw)
+                if isinstance(repos, list) and repos:
+                    return repos
+            except Exception:
+                pass
+        return [self.github_repo] if self.github_repo else []
+
+    def add_github_repo(self, repo: str) -> dict:
+        repo = (repo or "").strip()
+        if not re.match(r"^[\w.\-]+/[\w.\-]+$", repo):
+            return {"error": "repo must look like owner/name"}
+        repos = self.github_repos
+        if repo not in repos:
+            repos.append(repo)
+            self.memory.db.meta_set("github_repos", json.dumps(repos))
+        return {"repos": repos}
+
+    def remove_github_repo(self, repo: str) -> dict:
+        repos = [r for r in self.github_repos if r != repo]
+        self.memory.db.meta_set("github_repos", json.dumps(repos))
+        return {"repos": repos}
+
+    def github_access_mode(self) -> str:
+        return self.memory.db.meta_get("github_access_mode") or "write"
+
+    def set_github_access_mode(self, mode: str) -> dict:
+        mode = "write" if mode == "write" else "read"
+        self.memory.db.meta_set("github_access_mode", mode)
+        return {"access_mode": mode}
+
     def set_sync_minutes(self, minutes: int) -> dict:
         minutes = max(1, min(int(minutes), 1440))
         self.sync_minutes = minutes
@@ -149,6 +185,8 @@ class State:
         return {
             "github_repo": self.github_repo,
             "repo_url": f"https://github.com/{self.github_repo}",
+            "repos": self.github_repos,
+            "access_mode": self.github_access_mode(),
             "github_token_configured": bool(self.github_token),
             "sync_minutes": self.sync_minutes,
             "last_sync_at": db.meta_get("github_last_sync_at"),
@@ -159,8 +197,9 @@ class State:
             "google_client_id": GOOGLE_CLIENT_ID,
         }
 
-    def sync_github_now(self) -> dict:
-        """One GitHub sync pass; safe to call from any thread."""
+    def sync_github_now(self, repo: str | None = None) -> dict:
+        """One GitHub sync pass for one repo; safe to call from any thread."""
+        repo = repo or self.github_repo
         if self.sync_status.get("running"):
             return {"error": "sync already running",
                     **(self.sync_status.get("last") or {})}
@@ -168,13 +207,23 @@ class State:
         try:
             result = gh_sync.sync_github(
                 self.memory, self.memory.db,
-                self.github_repo, self.github_token,
+                repo, self.github_token,
                 investigate_fn=lambda alert: self.agent.investigate(alert),
             )
             self.sync_status["last"] = result
             return result
         finally:
             self.sync_status["running"] = False
+
+    def sync_all_repos(self) -> dict:
+        """Sync every connected repo; returns per-repo results."""
+        out = {}
+        for repo in self.github_repos:
+            try:
+                out[repo] = self.sync_github_now(repo)
+            except Exception as e:
+                out[repo] = {"error": str(e)[:120]}
+        return out
 
 
     # ---- plugins ------------------------------------------------------
@@ -257,7 +306,7 @@ def _sync_loop():
     while True:
         time.sleep(max(STATE.sync_minutes, 1) * 60)
         try:
-            STATE.sync_github_now()
+            STATE.sync_all_repos()
         except Exception as e:
             print(f"[sync] periodic sync failed: {e}")
 
@@ -446,6 +495,24 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/plugins/scan":
             try:
                 return self._send(200, STATE.sentinel_scan_now())
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+        if path == "/api/github/repos/add":
+            try:
+                return self._send(200, STATE.add_github_repo(
+                    body.get("repo", "")))
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+        if path == "/api/github/repos/remove":
+            try:
+                return self._send(200, STATE.remove_github_repo(
+                    body.get("repo", "")))
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+        if path == "/api/github/mode":
+            try:
+                return self._send(200, STATE.set_github_access_mode(
+                    body.get("mode", "read")))
             except Exception as e:
                 return self._send(500, {"error": str(e)})
         if path == "/api/plugins/interval":
