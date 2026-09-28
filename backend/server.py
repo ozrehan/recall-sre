@@ -212,6 +212,7 @@ class State:
             "incidents_remembered": db.count(),
             "groq_configured": bool(os.environ.get("GROQ_API_KEY")),
             "google_client_id": GOOGLE_CLIENT_ID,
+            "github_oauth_configured": bool(GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET),
         }
 
     def sync_github_now(self, repo: str | None = None) -> dict:
@@ -382,10 +383,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, {"error": "GitHub OAuth not configured"})
             host = self.headers.get("Host", "")
             cb = "https://" + host + "/api/github/oauth/callback"
+            qs0 = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            login_mode = (qs0.get("mode") or [""])[0] == "login"
             q = urllib.parse.urlencode({
                 "client_id": GITHUB_CLIENT_ID,
                 "redirect_uri": cb,
                 "scope": "repo",
+                "state": "login" if login_mode else "connect",
             })
             return self._redirect("https://github.com/login/oauth/authorize?" + q)
         if path == "/api/github/oauth/callback":
@@ -409,6 +413,16 @@ class Handler(BaseHTTPRequestHandler):
                 if not access:
                     return self._redirect("/?github=error")
                 STATE.memory.db.meta_set("github_oauth_token", access)
+                state = (qs.get("state") or [""])[0]
+                if state == "login":
+                    # "Login with GitHub": also sign the user into TraceMind
+                    try:
+                        db = STATE.memory.db
+                        with db._lock, db._conn() as c:
+                            out = auth_mod.github_login(c, access)
+                        return self._redirect("/?github=login&token=" + urllib.parse.quote(out["token"], safe=""))
+                    except Exception:
+                        return self._redirect("/?github=error")
                 return self._redirect("/?github=connected")
             except Exception:
                 return self._redirect("/?github=error")
