@@ -17,7 +17,9 @@ never as a fake "similarity %". The UI labels them accordingly.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 from typing import Any
 
 from .base import MemoryStore, incident_to_text
@@ -58,6 +60,88 @@ def _postmortem_text(incident: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+class _HindsightBridge:
+    """Own the SDK client on one dedicated thread + event loop.
+
+    The SDK caches a single aiohttp session bound to the event loop that
+    created it. Our server handles each request on a different thread, so
+    calling the SDK straight from request threads reuses that session on
+    the wrong loop — aiohttp then raises
+    "Timeout context manager should be used inside a task".
+    This bridge creates the client on its own loop and marshals every
+    call to it via run_coroutine_threadsafe, using the SDK's async API.
+    """
+
+    def __init__(self, url: str, api_key: str | None, bank_id: str):
+        self._url = url
+        self._api_key = api_key
+        self._bank_id = bank_id
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._client: Any = None
+        self._error: BaseException | None = None
+        self._ready = threading.Event()
+        self._thread = threading.Thread(
+            target=self._serve, name="hindsight-io", daemon=True
+        )
+        self._thread.start()
+        if not self._ready.wait(timeout=60):
+            raise RuntimeError("Hindsight bridge thread failed to start")
+        if self._error is not None:
+            raise self._error
+
+    # -- runs on the bridge thread -------------------------------------
+    def _serve(self) -> None:
+        try:
+            from hindsight_client import Hindsight
+
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            kwargs: dict[str, Any] = {"base_url": self._url, "timeout": 60.0}
+            if self._api_key:
+                kwargs["api_key"] = self._api_key
+            # Sync constructor is fine here: the loop isn't running yet, so
+            # the SDK's internal run_until_complete works.
+            self._client = Hindsight(**kwargs)
+            self._loop.run_until_complete(self._ensure_bank())
+        except BaseException as e:  # noqa: BLE001 — surfaced to the caller
+            self._error = e
+        finally:
+            self._ready.set()
+        if self._client is not None and self._loop is not None:
+            self._loop.run_forever()
+
+    async def _ensure_bank(self) -> None:
+        try:
+            await self._client.acreate_bank(
+                bank_id=self._bank_id,
+                name="Incident Memory",
+                mission=BANK_MISSION,
+                reflect_mission=REFLECT_DIRECTIVE,
+            )
+        except Exception as e:
+            # Bank probably already exists — make sure the directive is set.
+            if "already exists" in str(e).lower() or "conflict" in str(e).lower():
+                try:
+                    await self._client.aupdate_bank_config(
+                        self._bank_id, reflect_mission=REFLECT_DIRECTIVE
+                    )
+                except Exception:
+                    pass
+            else:
+                raise
+
+    # -- called from any thread ----------------------------------------
+    def call(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
+        """Run an async SDK method on the bridge loop; return its result."""
+        assert self._loop is not None and self._client is not None
+
+        async def _invoke() -> Any:
+            return await getattr(self._client, method_name)(*args, **kwargs)
+
+        future = asyncio.run_coroutine_threadsafe(_invoke(), self._loop)
+        return future.result(timeout=180)
+
+
 class HindsightMemoryStore(MemoryStore):
     """MemoryStore backed by a real Hindsight instance."""
 
@@ -69,44 +153,18 @@ class HindsightMemoryStore(MemoryStore):
         api_key: str | None = None,
         bank_id: str = BANK_ID,
     ):
-        from hindsight_client import Hindsight
-
         # api_key is optional: Hindsight Cloud requires one, but a
         # self-hosted instance may run without auth.
-        kwargs: dict[str, Any] = {"base_url": url, "timeout": 60.0}
-        if api_key:
-            kwargs["api_key"] = api_key
-        self.client = Hindsight(**kwargs)
         self.bank_id = bank_id
-        self._ensure_bank()
-
-    # -- setup ---------------------------------------------------------
-    def _ensure_bank(self) -> None:
-        try:
-            self.client.create_bank(
-                bank_id=self.bank_id,
-                name="Incident Memory",
-                mission=BANK_MISSION,
-                reflect_mission=REFLECT_DIRECTIVE,
-            )
-        except Exception as e:
-            # Bank probably already exists — make sure the directive is set.
-            if "already exists" in str(e).lower() or "conflict" in str(e).lower():
-                try:
-                    self.client.update_bank_config(
-                        self.bank_id, reflect_mission=REFLECT_DIRECTIVE
-                    )
-                except Exception:
-                    pass
-            else:
-                raise
+        self._bridge = _HindsightBridge(url, api_key, bank_id)
 
     # -- writes ----------------------------------------------------------
     def store_incident(self, incident: dict[str, Any]) -> str:
         inc_id = incident.get("id") or f"INC-{self.count() + 1:04d}"
         incident = dict(incident)
         incident["id"] = inc_id
-        self.client.retain(
+        self._bridge.call(
+            "aretain",
             bank_id=self.bank_id,
             content=_postmortem_text(incident),
             context="production incident",
@@ -135,7 +193,8 @@ class HindsightMemoryStore(MemoryStore):
         # recall() rejects queries over ~500 tokens — keep it tight
         query = query_text[:1500]
         tags = [f"service:{service}"] if service else None
-        resp = self.client.recall(
+        resp = self._bridge.call(
+            "arecall",
             bank_id=self.bank_id,
             query=query,
             types=["world", "experience", "observation"],
@@ -181,7 +240,8 @@ class HindsightMemoryStore(MemoryStore):
 
     def get(self, incident_id: str) -> dict[str, Any] | None:
         try:
-            resp = self.client.list_memories(
+            resp = self._bridge.call(
+                "alist_memories",
                 self.bank_id, search_query=f"incident-{incident_id}", limit=10
             )
             units = getattr(resp, "items", None) or []
@@ -204,7 +264,9 @@ class HindsightMemoryStore(MemoryStore):
             seen: set[str] = set()
             offset = 0
             while True:
-                resp = self.client.list_memories(self.bank_id, limit=100, offset=offset)
+                resp = self._bridge.call(
+                    "alist_memories", self.bank_id, limit=100, offset=offset
+                )
                 units = getattr(resp, "items", None) or []
                 if not units:
                     break
@@ -232,5 +294,7 @@ class HindsightMemoryStore(MemoryStore):
     # -- reflect: evidence-grounded briefing -------------------------------
     def briefing(self, query: str) -> str:
         """One-shot evidence-grounded synthesis via Hindsight reflect."""
-        resp = self.client.reflect(bank_id=self.bank_id, query=query, budget="mid")
+        resp = self._bridge.call(
+            "areflect", bank_id=self.bank_id, query=query, budget="mid"
+        )
         return getattr(resp, "text", "") or ""
