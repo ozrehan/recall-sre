@@ -8,135 +8,67 @@
 </head>
 <body>
 
-<header class="topbar">
-  <div class="brand">
-    <div class="logo">🧠</div>
-    <div>
-      <h1>Recall<span class="accent">SRE</span></h1>
-      <div class="tagline">Turn every production incident into organizational memory.</div>
-    </div>
-  </div>
-  <div class="topbar-right">
-    <div class="timetravel" title="Run the same incident against two memories">
-      <span class="tt-label">🕰 Same incident, two memories:</span>
-      <div class="seg">
-        <button data-mode="empty">Day 1 · blank memory</button>
-        <button data-mode="trained" class="active">Day 120 · 28 remembered</button>
+<div class="app">
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="side-top">
+      <div class="side-brand">
+        <div class="logo">🧠</div>
+        <div><div class="side-name">RecallSRE</div>
+        <div class="side-sub">incident memory</div></div>
       </div>
+      <button class="newchat" id="newChatBtn">＋ New incident</button>
     </div>
-    <div class="pills">
+
+    <div class="side-label">Incident history</div>
+    <div class="history" id="historyList">
+      <div class="history-empty">No incidents yet.<br>Fire one from the chat.</div>
+    </div>
+
+    <div class="side-label">Organizational memory</div>
+    <div class="membox" id="memBox">
+      <div class="memrow"><span>remembered</span><b id="memCount">…</b></div>
+      <div class="memrow"><span>avg resolution</span><b id="memMttr">…</b></div>
+      <div class="memrow"><span>services</span><b id="memSvc">…</b></div>
+      <div class="memrow"><span>backend</span><b id="memBackend">…</b></div>
+    </div>
+
+    <div class="side-foot">
       <div class="pill" id="backendBadge">memory: <b>…</b></div>
-      <div class="pill">remembered: <b id="memCount">…</b></div>
+      <a href="https://github.com/ozrehan/recall-sre" target="_blank" rel="noopener">github ↗</a>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <!-- ============ MAIN ============ -->
+  <div class="main">
+    <header class="chathead">
+      <button class="burger" id="burger">☰</button>
+      <div class="chead-title">
+        <b>RecallSRE</b>
+        <span>Turn every production incident into organizational memory.</span>
+      </div>
+      <div class="timetravel" title="Run the same incident against two memories">
+        <span class="tt-label">🕰</span>
+        <div class="seg">
+          <button data-mode="empty">Day 1 · blank</button>
+          <button data-mode="trained" class="active">Day 120 · trained</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="chat" id="chat"></div>
+
+    <div class="composer-zone">
+      <div class="chips" id="chips"></div>
+      <div class="composer">
+        <textarea id="input" rows="1" placeholder="Describe a production incident… or pick one above"></textarea>
+        <button id="sendBtn" title="Send">↑</button>
+      </div>
+      <div class="disclaimer">RecallSRE recalls similar past incidents as hypotheses — similar symptoms can have different root causes. Verify before acting.</div>
     </div>
   </div>
-</header>
-
-<main>
-  <!-- Guided demo flow -->
-  <section class="guide">
-    <div class="guide-head">
-      <h2>How the demo works</h2>
-      <p>Follow the loop an on-call engineer runs with RecallSRE on every incident.
-         Try the <b>same incident</b> on <b>Day 1</b> and on <b>Day 120</b> — the difference is the memory.</p>
-    </div>
-    <ol class="steps">
-      <li id="step1"><span class="n">1</span><div><b>Fire an incident</b><span>Pick a production alert below.</span></div></li>
-      <li id="step2"><span class="n">2</span><div><b>Search memory</b><span>The agent recalls similar past incidents.</span></div></li>
-      <li id="step3"><span class="n">3</span><div><b>Get recommendations</b><span>Investigation steps drawn from what worked before.</span></div></li>
-      <li id="step4"><span class="n">4</span><div><b>Resolve &amp; teach</b><span>The fix is stored — the next incident gets smarter.</span></div></li>
-    </ol>
-  </section>
-
-  <!-- Step 1 -->
-  <section>
-    <div class="sec-head"><h2><span class="stepnum">1</span> Fire an incident</h2>
-      <p class="sec-sub">These are the alerts paging the on-call engineer right now.</p></div>
-    <div class="scenarios" id="scenarios"></div>
-  </section>
-
-  <!-- Steps 2 & 3 -->
-  <section>
-    <div class="sec-head"><h2><span class="stepnum">2–3</span> What the agent sees &amp; recommends</h2>
-      <p class="sec-sub">Left: the live incident. Right: what organizational memory recalls — and the recommendation built from it.</p></div>
-    <div class="grid">
-      <div class="panel live" id="livePanel">
-        <h3><span class="dot"></span> Live incident</h3>
-        <div class="empty-note">🔥 Fire an incident above to begin.</div>
-      </div>
-      <div class="panel" id="matchPanel">
-        <h3>🧠 Hindsight memory</h3>
-        <div class="empty-note">Similar past incidents will appear here, ranked with relevance scores.</div>
-      </div>
-    </div>
-    <div class="panel rec-panel" id="recPanel">
-      <h3>⚡ Agent recommendation</h3>
-      <div class="empty-note">The agent recommends investigation steps — as hypotheses backed by evidence, never false certainty.</div>
-    </div>
-  </section>
-
-  <!-- Step 4 -->
-  <section id="resolveSection" class="hidden">
-    <div class="sec-head"><h2><span class="stepnum">4</span> Resolve &amp; teach the agent</h2>
-      <p class="sec-sub">Close the loop: the post-mortem goes into organizational memory, so the <i>next</i> similar incident starts smarter.</p></div>
-    <div class="panel">
-      <form class="resolve" id="resolveForm">
-        <div class="frow">
-          <div class="fcol"><label>Root cause</label>
-            <textarea id="fRoot" required placeholder="e.g. Database connection pool exhausted after deploy v3.1.2 increased query fan-out"></textarea></div>
-          <div class="fcol"><label>Fix applied</label>
-            <textarea id="fFix" required placeholder="e.g. Raised pool max 100 → 300, added leak detection, rolled back v3.1.2"></textarea></div>
-        </div>
-        <div class="frow">
-          <div class="fcol"><label>Investigation steps taken <span class="opt">(optional)</span></label>
-            <input id="fSteps" placeholder="e.g. checked pg_stat_activity; correlated deploy time"></div>
-          <div class="fcol"><label>Commands used <span class="opt">(optional)</span></label>
-            <input id="fCmds" placeholder="e.g. kubectl logs -l app=payments --tail=200"></div>
-        </div>
-        <div class="frow">
-          <div class="fcol"><label>Engineer</label><input id="fEng" placeholder="on-call"></div>
-          <div class="fcol"><label>Time to resolve (minutes)</label><input id="fMttr" type="number" min="1" value="8"></div>
-        </div>
-        <div><button class="primary" id="resolveBtn" type="submit">Store in organizational memory →</button></div>
-      </form>
-      <div class="learned" id="learned"></div>
-    </div>
-  </section>
-
-  <!-- Memory overview -->
-  <section>
-    <div class="sec-head"><h2>🧬 Organizational memory</h2>
-      <p class="sec-sub">Everything the agent has learned so far. This is the Hindsight bank the agent searches on every incident.</p></div>
-    <div class="stats" id="statsRow"></div>
-    <div class="panel">
-      <h3>Memory growth — incidents learned over time</h3>
-      <div class="chart" id="growthChart"></div>
-      <h3 style="margin-top:18px">Recently remembered</h3>
-      <div class="memstrip" id="memStrip"></div>
-    </div>
-  </section>
-</main>
-
-<footer>
-  <div class="foot-grid">
-    <div>
-      <b>How Hindsight powers this</b>
-      <p>Every resolved incident — error signature, symptoms, root cause, investigation steps,
-         commands, fix, and MTTR — is stored as a memory in Hindsight. When a new incident fires,
-         the agent searches that memory for similar past incidents and recommends investigation
-         steps drawn from what actually worked before. Similar symptoms can have different causes,
-         so every recommendation is framed as an evidence-backed hypothesis, never a certainty.</p>
-    </div>
-    <div>
-      <b>Run your own</b>
-      <p><code>python backend/server.py</code> — set <code>HINDSIGHT_API_KEY</code> to use
-         Hindsight Cloud (URL defaults to <code>https://api.hindsight.vectorize.io</code>),
-         or set <code>HINDSIGHT_URL</code> for a self-hosted instance (no key needed if auth is off).
-         Optionally set <code>GROQ_API_KEY</code> for LLM-synthesized briefings.
-         Without keys, the demo runs on an identical local memory interface.</p>
-      <p><a href="https://github.com/ozrehan/recall-sre">github.com/ozrehan/recall-sre</a></p>
-    </div>
-  </div>
-</footer>
+</div>
 
 <script src="app.js"></script>
 </body>
