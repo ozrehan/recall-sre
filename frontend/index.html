@@ -56,6 +56,7 @@
           <button data-mode="trained" class="active">Day 120 · trained</button>
         </div>
       </div>
+      <button class="actbtn" id="activityBtn" title="Activity">🕐</button>
     </header>
 
     <div class="chat" id="chat"></div>
@@ -69,6 +70,24 @@
       <div class="disclaimer">TraceMind recalls similar past incidents as hypotheses — similar symptoms can have different root causes. Verify before acting.</div>
     </div>
   </div>
+
+  <!-- ============ ACTIVITY PANEL ============ -->
+  <div class="act-scrim" id="actScrim"></div>
+  <aside class="actpanel" id="actPanel">
+    <button class="act-close" id="actClose">✕</button>
+    <div class="act-profile">
+      <img src="logo-icon.png" alt="TraceMind">
+      <div class="act-name">TraceMind</div>
+      <div class="act-status"><span class="dot"></span>Connected</div>
+    </div>
+    <div class="act-tabs" id="actTabs">
+      <button data-f="all" class="active" title="All">☰</button>
+      <button data-f="fired" title="Fired">🚨</button>
+      <button data-f="resolved" title="Resolved">✓</button>
+    </div>
+    <div class="act-day">Today</div>
+    <div class="act-list" id="actList"></div>
+  </aside>
 </div>
 
 <script src="app.js"></script>
