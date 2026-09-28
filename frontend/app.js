@@ -413,7 +413,13 @@ async function refreshGithubPanel() {
     const st = await tmApi.get("/api/plugins/status");
     $("ghRepoLine").textContent = st.github_repo || "—";
     $("ghRepoLink").href = st.repo_url || "#";
-    $("ghStatusText").textContent = "Connected — watching on cloud";
+    const gc = st.github_connection || {};
+    if (gc.connected) {
+      $("ghStatusText").textContent =
+        "Connected as @" + gc.user + (gc.can_write ? " — can edit & fix" : " — read-only");
+    } else {
+      $("ghStatusText").textContent = "Not connected: " + (gc.reason || "no token");
+    }
     const sn = st.sentinel || {};
     $("ghScanLine").textContent = "Last scan: " +
       (sn.last_run ? new Date(sn.last_run).toLocaleString() : "never") +
