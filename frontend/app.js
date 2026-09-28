@@ -249,7 +249,7 @@ function welcome() {
   $("chat").innerHTML = "";
   $("chips").style.display = "";
   const body = addAgentMsg();
-  say(body, `<p>👋 I'm <b>TraceMind</b> — I turn your repo's GitHub issues into organizational memory.</p>
+  say(body, `<p>👋 I'm <b>Trace</b> — I turn your repo's GitHub issues into organizational memory.</p>
     <p>Open issues are synced as live incidents. Pick one below (or describe your own) and I'll search <b>past incidents</b>, show what fixed them, and recommend investigation steps — as evidence-backed hypotheses, never false certainty. When you resolve it, I'll remember the post-mortem, so the next similar issue starts smarter.</p>`);
 }
 function renderChips() {
