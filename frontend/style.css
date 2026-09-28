@@ -571,3 +571,32 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
 .repo-row button {
   border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 14px;
 }
+/* ---------- profile modal ---------- */
+.profmodal { width: min(480px, calc(100vw - 32px)); }
+.prof-view { text-align: center; padding: 18px 6px 10px; }
+.prof-avatar { width: 96px; height: 96px; border-radius: 50%; object-fit: cover; background: #eee; margin: 0 auto; display: block; }
+.prof-avatar.initial { display: flex; align-items: center; justify-content: center; font-size: 38px; font-weight: 700; color: #555; background: #e8e8e8; }
+.prof-name { font-size: 22px; font-weight: 700; margin-top: 12px; }
+.prof-username { color: var(--muted); font-size: 14px; margin-top: 2px; }
+.prof-bio { font-size: 14.5px; line-height: 1.55; margin: 12px 4px 0; white-space: pre-wrap; }
+.prof-joined { color: var(--muted); font-size: 12.5px; margin-top: 10px; }
+.prof-stats { display: flex; justify-content: center; gap: 28px; margin: 14px 0 4px; }
+.prof-stats b { font-size: 17px; display: block; }
+.prof-stats span { font-size: 12px; color: var(--muted); }
+.prof-socials { display: flex; justify-content: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+.prof-socials a { width: 38px; height: 38px; border: 1px solid var(--border); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #333; background: #fff; }
+.prof-socials a:hover { background: #f4f4f4; }
+.prof-socials svg { width: 18px; height: 18px; }
+.prof-edit-btn { margin: 18px 0 8px; }
+.prof-form { padding: 8px 2px; }
+.prof-form label { display: block; font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 14px 0 6px; }
+.prof-form input, .prof-form textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 14.5px; font-family: inherit; }
+.prof-form textarea { min-height: 76px; resize: vertical; }
+.prof-avatar-row { display: flex; align-items: center; gap: 14px; }
+.prof-avatar-row .prof-avatar { margin: 0; width: 72px; height: 72px; font-size: 28px; }
+.prof-ava-btns { display: flex; gap: 8px; }
+.prof-soc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+.prof-err { color: #c0392b; font-size: 13px; margin-top: 10px; min-height: 18px; }
+.prof-actions { display: flex; gap: 10px; margin: 16px 0 6px; }
+.user-chip.clickable { cursor: pointer; }
+.user-chip.clickable:hover { background: #f5f5f5; }
