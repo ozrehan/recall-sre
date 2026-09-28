@@ -1295,7 +1295,7 @@ function renderProfile() {
       <div class="pp-sec">
         <h3>Connected repositories</h3>
         ${repos.length ? repoRows : `<div class="pp-empty">
-          <div class="pp-ticket">${PP_TICKET}</div>
+          <div class="pp-ticket">${GH_SVG}</div>
           <b>Nothing Here, Yet</b>
           <p>${esc(p.name || "This user")} hasn't connected any repositories at this time.</p>
         </div>`}
