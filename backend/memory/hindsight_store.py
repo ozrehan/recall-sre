@@ -212,4 +212,4 @@ class HindsightMemoryStore(MemoryStore):
     def briefing(self, query: str) -> str:
         """One-shot evidence-grounded synthesis via Hindsight reflect."""
         resp = self.client.reflect(bank_id=self.bank_id, query=query, budget="mid")
-        return getattr(resp, "answer", "") or ""
+        return getattr(resp, "text", "") or ""
