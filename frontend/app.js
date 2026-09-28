@@ -37,7 +37,9 @@ function renderAuthSlot() {
 function renderActAuth() {
   const box = $("actAuth");
   if (!box) return;
+  const panel = $("actPanel");
   if (authUser) {
+    panel.classList.remove("auth-mode");
     box.innerHTML = `<div class="auth-card"><div class="user-chip">
       <div class="uavatar">${esc(initialOf(authUser.name))}</div>
       <div class="user-meta"><b>${esc(authUser.name)}</b><span>${esc(authUser.email)}</span></div>
@@ -47,6 +49,7 @@ function renderActAuth() {
     return;
   }
   const lu = lastUser();
+  panel.classList.add("auth-mode");
   box.innerHTML = `<div class="auth-card">
     ${lu ? `<div class="auth-welcome">Welcome back</div>
     <div class="g-account" id="gAccountRow" role="button" tabindex="0" title="Continue as ${esc(lu.email)}">
