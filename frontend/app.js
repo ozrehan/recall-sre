@@ -394,6 +394,105 @@ function setActPanel(open) {
   $("actScrim").classList.toggle("show", open);
 }
 
+/* ---------- GitHub + Plugins panels ---------- */
+function setPanel(panelId, scrimId, open) {
+  $(panelId).classList.toggle("open", open);
+  $(scrimId).classList.toggle("show", open);
+}
+const tmApi = {
+  async get(p) { const r = await fetch(p); return r.json(); },
+  async post(p, b) {
+    const r = await fetch(p, {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(b || {})});
+    return r.json();
+  },
+};
+async function refreshGithubPanel() {
+  try {
+    const st = await tmApi.get("/api/plugins/status");
+    $("ghRepoLine").textContent = st.github_repo || "—";
+    $("ghRepoLink").href = st.repo_url || "#";
+    $("ghStatusText").textContent = "Connected — watching on cloud";
+    const sn = st.sentinel || {};
+    $("ghScanLine").textContent = "Last scan: " +
+      (sn.last_run ? new Date(sn.last_run).toLocaleString() : "never") +
+      (sn.enabled ? "" : " (paused)");
+    const res = sn.last_result;
+    const box = $("ghFindings");
+    if (res && res.problems && res.problems.length) {
+      box.innerHTML = res.problems.map((p) =>
+        `<div class="finding"><b>${esc(p.title)}</b>`
+        + (p.run_id ? "" : "") + `</div>`).join("");
+    } else if (res && !res.error) {
+      box.innerHTML = `<p class="plug-sub">No problems found. CI is green.</p>`;
+    } else if (res && res.error) {
+      box.innerHTML = `<p class="plug-sub">Scan error: ${esc(res.error)}</p>`;
+    } else {
+      box.innerHTML = "";
+    }
+  } catch (e) {
+    $("ghStatusText").textContent = "Could not reach server";
+  }
+}
+async function refreshPluginsPanel() {
+  try {
+    const st = await tmApi.get("/api/plugins/status");
+    $("plugList").innerHTML = st.plugins.map((p) => `
+      <div class="plug-card">
+        <div class="plug-head"><b>${esc(p.name)}</b>
+          <label class="switch"><input type="checkbox" data-plug="${p.id}"
+            ${p.enabled ? "checked" : ""}><span></span></label>
+        </div>
+        <p class="plug-sub">${esc(p.description)}</p>
+      </div>`).join("");
+    document.querySelectorAll("#plugList input[data-plug]").forEach((el) => {
+      el.addEventListener("change", async () => {
+        await tmApi.post("/api/plugins/toggle/" + el.dataset.plug,
+                       {enabled: el.checked});
+        refreshGithubPanel();
+      });
+    });
+    const mins = String((st.sentinel || {}).interval_minutes || 15);
+    $("scanInterval").value = ["5","15","30","60"].includes(mins) ? mins : "15";
+  } catch (e) { /* offline */ }
+}
+function bindPanels() {
+  $("navGithub").addEventListener("click", () => {
+    setPanel("ghPanel", "ghScrim", true); refreshGithubPanel();
+  });
+  $("navPlugins").addEventListener("click", () => {
+    setPanel("plugPanel", "plugScrim", true); refreshPluginsPanel();
+  });
+  $("ghClose").addEventListener("click", () => setPanel("ghPanel", "ghScrim", false));
+  $("ghScrim").addEventListener("click", () => setPanel("ghPanel", "ghScrim", false));
+  $("plugClose").addEventListener("click", () => setPanel("plugPanel", "plugScrim", false));
+  $("plugScrim").addEventListener("click", () => setPanel("plugPanel", "plugScrim", false));
+  $("ghConnectBtn").addEventListener("click", async () => {
+    const repo = $("ghRepoInput").value.trim();
+    if (!repo) return;
+    $("ghConnectBtn").textContent = "…";
+    const r = await tmApi.post("/api/settings", {github_repo: repo});
+    $("ghConnectBtn").textContent = "Connect";
+    if (r.github_repo) { $("ghRepoInput").value = ""; refreshGithubPanel(); }
+    else alert(r.error || "Could not connect");
+  });
+  $("ghScanBtn").addEventListener("click", async () => {
+    $("ghScanBtn").textContent = "Scanning…";
+    await tmApi.post("/api/plugins/scan", {});
+    $("ghScanBtn").textContent = "Scan now";
+    refreshGithubPanel();
+  });
+  $("scanIntervalBtn").addEventListener("click", async () => {
+    await tmApi.post("/api/plugins/interval",
+                   {minutes: parseInt($("scanInterval").value, 10)});
+    refreshPluginsPanel();
+  });
+}
+if (document.readyState === "loading")
+  document.addEventListener("DOMContentLoaded", bindPanels);
+else bindPanels();
+
 /* ---------- chat transcripts: reopen previous chats ---------- */
 let currentChatTs = null;
 const CHAT_PREFIX = "tm_chat_";
