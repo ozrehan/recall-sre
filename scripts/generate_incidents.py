@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a realistic synthetic incident dataset for RecallSRE.
+"""Generate a realistic synthetic incident dataset for TraceMind.
 
 Produces backend/data/incidents.json — ~28 fully-detailed production incidents
 across 9 services, with recurring archetypes so the memory demo can show
