@@ -679,3 +679,9 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
   letter-spacing: .5px; vertical-align: 2px; margin-left: 6px; white-space: nowrap;
 }
 .gh-hint { font-size: 12px; color: var(--muted); text-align: center; margin: 6px 0 2px; }
+/* ---------- animated wolf avatar (per-user color) ---------- */
+.wolf-ava { display: block; border-radius: 50%; background: #141414; overflow: hidden; }
+.wolf-ava .wolf-bob { animation: wolfbob 3s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+@keyframes wolfbob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+.wolf-ava .wolf-eyes { animation: wolfblink 4.2s infinite; transform-box: fill-box; transform-origin: center; }
+@keyframes wolfblink { 0%, 93%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.06); } }
