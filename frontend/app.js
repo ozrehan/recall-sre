@@ -79,7 +79,7 @@ function renderActAuth() {
     panel.classList.remove("auth-mode");
     const av = (profData && profData.avatar_url)
       ? `<img class="uavatar" src="${esc(profData.avatar_url)}" alt="" style="object-fit:cover">`
-      : `<div class="uavatar">${esc(initialOf(authUser.name))}</div>`;
+      : wolfSVG(wolfColor(userColorKey(profData || authUser)), "uavatar");
     box.innerHTML = `<div class="auth-card"><div class="user-chip clickable" id="userChip" title="Open your profile">
       ${av}
       <div class="user-meta"><b>${esc(authUser.name)}</b><span>${esc(authUser.email)}</span></div>
@@ -1144,6 +1144,47 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 });
 
+
+/* ---------- animated wolf avatar: every user gets their own color ---------- */
+const WOLF_COLORS = ["#5b9dff","#2dd4bf","#4ade80","#a78bfa","#f472b6","#fb923c",
+  "#f87171","#facc15","#22d3ee","#818cf8","#a3e635","#fb7185"];
+function wolfColor(key) {
+  const str = String(key || "?");
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (Math.imul(h, 31) + str.charCodeAt(i)) >>> 0;
+  return WOLF_COLORS[h % WOLF_COLORS.length];
+}
+function wolfSVG(color, cls) {
+  return `<svg class="${cls || ""} wolf-ava" viewBox="0 0 120 120" aria-hidden="true">
+    <g transform="translate(60 62) scale(0.82) translate(-60 -62)">
+      <g class="wolf-bob">
+        <path d="M30 44 L18 10 L52 28 Z" fill="${color}" stroke="#222" stroke-width="4" stroke-linejoin="round"/>
+        <path d="M90 44 L102 10 L68 28 Z" fill="${color}" stroke="#222" stroke-width="4" stroke-linejoin="round"/>
+        <path d="M33 36 L27 22 L42 31 Z" fill="#222" opacity=".22"/>
+        <path d="M87 36 L93 22 L78 31 Z" fill="#222" opacity=".22"/>
+        <circle cx="60" cy="68" r="42" fill="${color}" stroke="#222" stroke-width="4"/>
+        <path d="M28 52 q10 -8 20 -2" stroke="#222" stroke-width="3" fill="none" stroke-linecap="round" opacity=".5"/>
+        <path d="M92 52 q-10 -8 -20 -2" stroke="#222" stroke-width="3" fill="none" stroke-linecap="round" opacity=".5"/>
+        <g class="wolf-eyes">
+          <ellipse cx="45" cy="64" rx="6.5" ry="7.5" fill="#222"/>
+          <ellipse cx="75" cy="64" rx="6.5" ry="7.5" fill="#222"/>
+          <circle cx="47" cy="61" r="2.2" fill="#fff"/>
+          <circle cx="77" cy="61" r="2.2" fill="#fff"/>
+        </g>
+        <ellipse cx="60" cy="86" rx="21" ry="15" fill="#fff" stroke="#222" stroke-width="3"/>
+        <ellipse cx="60" cy="80" rx="7.5" ry="5.5" fill="#222"/>
+        <path d="M60 85 v5 M60 90 q-7 7 -14 4 M60 90 q7 7 14 4" stroke="#222" stroke-width="3" fill="none" stroke-linecap="round"/>
+        <circle cx="36" cy="78" r="4" fill="#f472b6" opacity=".5"/>
+        <circle cx="84" cy="78" r="4" fill="#f472b6" opacity=".5"/>
+      </g>
+    </g>
+  </svg>`;
+}
+function userColorKey(u) {
+  u = u || {};
+  return u.username || u.name || u.email || "?";
+}
+
 /* ---------- profile page (dark, full screen, Luma-style) ---------- */
 const SOCIAL_META = [
   ["linkedin", "LinkedIn", '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.45 20.45h-3.55v-5.57c0-1.33-.03-3.04-1.85-3.04-1.86 0-2.14 1.45-2.14 2.94v5.67H9.35V9h3.41v1.56h.05c.47-.9 1.63-1.85 3.36-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28zM5.34 7.43a2.06 2.06 0 1 1 0-4.12 2.06 2.06 0 0 1 0 4.12zM7.12 20.45H3.55V9h3.57v11.45z"/></svg>'],
@@ -1175,7 +1216,7 @@ function profJoined(p) {
 }
 function profAvatar(p, cls) {
   if (p.avatar_url) return `<img class="${cls}" src="${esc(p.avatar_url)}" alt="">`;
-  return `<div class="${cls} initial">${esc(initialOf(p.name || "?"))}</div>`;
+  return wolfSVG(wolfColor(p.username || p.name), cls);
 }
 // openProfile(): no arg = own page; username string = someone's public page (?u=)
 function openProfile(username) {
@@ -1322,7 +1363,7 @@ function renderProfile() {
   const rm = $("ppAvaRm");
   if (rm) rm.addEventListener("click", () => {
     $("ppAvatarUrl").value = "";
-    $("ppAvaPrev").innerHTML = `<div class="pp-avatar initial">${esc(initialOf($("ppName").value || "?"))}</div>`;
+    $("ppAvaPrev").innerHTML = wolfSVG(wolfColor($("ppUsername").value || $("ppName").value), "pp-avatar");
     rm.remove();
   });
   $("ppSave").addEventListener("click", async () => {
