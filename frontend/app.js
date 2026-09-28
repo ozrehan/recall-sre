@@ -308,6 +308,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("burger").addEventListener("click", () => document.body.classList.toggle("side-open"));
   $("scrim").addEventListener("click", () => document.body.classList.remove("side-open"));
   $("settingsBtn").addEventListener("click", () => setModal(true));
+  $("avatarBtn").addEventListener("click", () => setModal(true));
   $("ghPill").addEventListener("click", () => setModal(true));
   $("setClose").addEventListener("click", () => setModal(false));
   $("setScrim").addEventListener("click", () => setModal(false));
