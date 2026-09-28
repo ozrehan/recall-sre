@@ -16,8 +16,14 @@ function esc(s) {
 /* ---------- auth: login before profile ---------- */
 let authUser = null;
 let authMode = "login";
+let googleClientId = "";
 const tmToken = () => localStorage.getItem("tm_token") || "";
+const lastUser = () => { try { return JSON.parse(localStorage.getItem("tm_last_user") || "null"); } catch (e) { return null; } };
 const initialOf = (name) => (String(name || "?").trim().charAt(0) || "?").toUpperCase();
+
+function rememberUser(u) {
+  localStorage.setItem("tm_last_user", JSON.stringify({ name: u.name, email: u.email }));
+}
 
 function renderAuthSlot() {
   const slot = $("authSlot");
@@ -40,13 +46,22 @@ function renderActAuth() {
     $("logoutBtn").addEventListener("click", doLogout);
     return;
   }
+  const lu = lastUser();
   box.innerHTML = `<div class="auth-card">
+    ${lu ? `<div class="auth-welcome">Welcome back</div>
+    <div class="g-account" id="gAccountRow" role="button" tabindex="0" title="Continue as ${esc(lu.email)}">
+      <span class="uavatar sm">${esc(initialOf(lu.name))}</span>
+      <span class="g-acc-meta"><b>${esc(lu.name)}</b><span>${esc(lu.email)}</span></span>
+      <span class="g-acc-x" id="gForget" title="Remove">✕</span>
+    </div>` : ""}
+    ${googleClientId ? `<div id="gsiBtn"></div>` : ""}
+    ${(lu || googleClientId) ? `<div class="auth-or"><span>OR</span></div>` : ""}
     <div class="auth-tabs">
       <button data-m="login" class="${authMode === "login" ? "active" : ""}">Log in</button>
       <button data-m="signup" class="${authMode === "signup" ? "active" : ""}">Sign up</button>
     </div>
     ${authMode === "signup" ? `<input id="authName" placeholder="Your name" autocomplete="name" maxlength="60">` : ""}
-    <input id="authEmail" type="email" placeholder="Email" autocomplete="email">
+    <input id="authEmail" type="email" placeholder="Email" autocomplete="email" value="${lu && authMode === "login" ? esc(lu.email) : ""}">
     <input id="authPass" type="password" placeholder="Password${authMode === "signup" ? " (min 6 characters)" : ""}" autocomplete="${authMode === "signup" ? "new-password" : "current-password"}">
     <button class="auth-go" id="authGo">${authMode === "signup" ? "Create account" : "Log in"}</button>
     <p class="auth-err" id="authErr"></p>
@@ -58,6 +73,63 @@ function renderActAuth() {
     const el = $(id);
     if (el) el.addEventListener("keydown", (e) => { if (e.key === "Enter") doAuthSubmit(); });
   });
+  const row = $("gAccountRow");
+  if (row) {
+    row.addEventListener("click", (e) => {
+      if (e.target.id === "gForget") {
+        e.stopPropagation();
+        localStorage.removeItem("tm_last_user");
+        renderActAuth();
+        return;
+      }
+      authMode = "login"; renderActAuth();
+      setTimeout(() => { const p = $("authPass"); if (p) p.focus(); }, 50);
+    });
+  }
+  renderGsiButton();
+}
+
+/* ---------- Google Sign-In (GIS) ---------- */
+function renderGsiButton() {
+  const slot = $("gsiBtn");
+  if (!slot || !googleClientId) return;
+  if (window.google && google.accounts && google.accounts.id) {
+    slot.innerHTML = "";
+    google.accounts.id.initialize({
+      client_id: googleClientId,
+      callback: onGoogleCredential,
+      auto_select: false,
+    });
+    google.accounts.id.renderButton(slot, {
+      theme: "outline", size: "large", width: "100%", text: "continue_with",
+    });
+    return;
+  }
+  if (!document.querySelector('script[data-gsi]')) {
+    const s = document.createElement("script");
+    s.src = "https://accounts.google.com/gsi/client";
+    s.async = true; s.defer = true; s.dataset.gsi = "1";
+    s.onload = renderGsiButton;
+    document.head.appendChild(s);
+  }
+}
+
+async function onGoogleCredential(resp) {
+  const err = $("authErr");
+  if (err) err.textContent = "Signing you in with Google…";
+  try {
+    const r = await fetch("/api/auth/google", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential: resp.credential }) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || "Google sign-in failed");
+    localStorage.setItem("tm_token", data.token);
+    rememberUser(data.user);
+    authUser = data.user;
+    renderAuthSlot(); renderActAuth();
+  } catch (e) {
+    if (err) err.textContent = e.message;
+  }
 }
 
 async function doAuthSubmit() {
@@ -72,6 +144,7 @@ async function doAuthSubmit() {
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || "something went wrong");
     localStorage.setItem("tm_token", data.token);
+    rememberUser(data.user);
     authUser = data.user;
     renderAuthSlot(); renderActAuth();
   } catch (e) {
@@ -443,6 +516,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   welcome();
   loadIncidents();
   refreshMemory();
+  try {
+    const s = await api("/api/settings");
+    googleClientId = s.google_client_id || "";
+  } catch (e) {}
   await authMe();
   renderAuthSlot(); renderActAuth();
   setInterval(refreshMemory, 60000);
