@@ -51,6 +51,55 @@ def _prompt(draft: dict[str, Any], matches: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+CHAT_SYSTEM = (
+    "You are Trace, the friendly AI assistant inside TraceMind — a website that "
+    "turns software incidents into searchable organizational memory.\n"
+    "What TraceMind does:\n"
+    "- Investigate: paste an alert, error, or stack trace and Trace breaks it down, "
+    "searches past incidents for similar ones, and recommends a fix.\n"
+    "- Organizational memory: every resolved incident is remembered and recalled "
+    "for future ones, with relevance scores and honesty about uncertainty.\n"
+    "- GitHub: connect repositories; a sentinel watches CI/workflow runs and files "
+    "incidents automatically; optional Auto-Fix opens a pull request with a fix "
+    "(never pushes to main).\n"
+    "- Profiles: each user has a profile page with stats (repos, issues, solved), "
+    "social links, and a shareable link.\n"
+    "- Activity panel: a timeline of fired and resolved incidents.\n"
+    "Answer the user's question directly and concisely, like a helpful AI "
+    "assistant. Keep it under 120 words, plain language, no markdown headers. "
+    "If they describe something broken (an error, alert, or outage), tell them "
+    "to paste the error here so you can investigate it as an incident."
+)
+
+
+def groq_chat(api_key: str, system: str, user: str,
+              model: str = MODEL, max_tokens: int = 350) -> str:
+    """One-shot chat completion via Groq's OpenAI-compatible API."""
+    payload = json.dumps(
+        {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": 0.5,
+            "max_tokens": max_tokens,
+        }
+    ).encode()
+    req = urllib.request.Request(
+        API_URL,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read())
+    return (data["choices"][0]["message"]["content"] or "").strip()
+
+
 class GroqBriefing:
     def __init__(self, api_key: str, model: str = MODEL):
         self.api_key = api_key
