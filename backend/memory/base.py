@@ -1,4 +1,4 @@
-"""Memory-store abstraction for RecallSRE.
+"""Memory-store abstraction for TraceMind.
 
 The agent talks ONLY to the ``MemoryStore`` interface defined here.
 Two implementations exist:
