@@ -14,7 +14,7 @@ import json
 import urllib.request
 from typing import Any
 
-MODEL = "qwen/qwen3-32b"  # fast, generous free tier; swap via GROQ_MODEL
+MODEL = "llama-3.3-70b-versatile"  # fast, generous free tier; swap via GROQ_MODEL
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 SYSTEM = (
