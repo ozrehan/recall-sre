@@ -1,0 +1,3 @@
+# Only needed for the real Hindsight backend.
+# The demo server itself is pure stdlib and runs without this.
+hindsight-client>=0.1.0
