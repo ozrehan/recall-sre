@@ -56,6 +56,23 @@ CREATE TABLE IF NOT EXISTS investigations (
   matches_json TEXT,
   created_at  TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
+
+-- GitHub Issues pipeline state: which issues have been synced, and when.
+CREATE TABLE IF NOT EXISTS github_sync (
+  repo             TEXT NOT NULL,
+  issue_number     INTEGER NOT NULL,
+  incident_id      TEXT NOT NULL,
+  issue_updated_at TEXT DEFAULT '',
+  issue_state      TEXT DEFAULT '',
+  synced_at        TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  PRIMARY KEY (repo, issue_number)
+);
+
+-- small key/value store (last sync time, connected repo, ...)
+CREATE TABLE IF NOT EXISTS app_meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT
+);
 """
 
 _ID_RE = re.compile(r"INC-(\d+)")
@@ -220,3 +237,56 @@ class IncidentDB:
              "at": r["created_at"]}
             for r in rows
         ]
+
+    # -- github sync state -------------------------------------------------
+    def record_github_sync(self, repo: str, issue_number: int, incident_id: str,
+                           issue_updated_at: str, issue_state: str) -> None:
+        with self._lock, self._conn() as c:
+            c.execute(
+                """INSERT INTO github_sync
+                   (repo, issue_number, incident_id, issue_updated_at,
+                    issue_state)
+                   VALUES (?,?,?,?,?)
+                   ON CONFLICT(repo, issue_number) DO UPDATE SET
+                    incident_id=excluded.incident_id,
+                    issue_updated_at=excluded.issue_updated_at,
+                    issue_state=excluded.issue_state,
+                    synced_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')""",
+                (repo, issue_number, incident_id, issue_updated_at,
+                 issue_state),
+            )
+
+    def get_github_sync(self, repo: str,
+                        issue_number: int) -> dict[str, Any] | None:
+        with self._conn() as c:
+            r = c.execute(
+                "SELECT * FROM github_sync WHERE repo=? AND issue_number=?",
+                (repo, issue_number),
+            ).fetchone()
+        return dict(r) if r else None
+
+    def github_sync_counts(self, repo: str) -> dict[str, int]:
+        with self._conn() as c:
+            total = c.execute(
+                "SELECT COUNT(*) FROM github_sync WHERE repo=?", (repo,)
+            ).fetchone()[0]
+            open_n = c.execute(
+                "SELECT COUNT(*) FROM github_sync WHERE repo=? AND issue_state='open'",
+                (repo,),
+            ).fetchone()[0]
+        return {"synced": total, "open": open_n, "closed": total - open_n}
+
+    # -- app meta (key/value) ----------------------------------------------
+    def meta_get(self, key: str) -> str | None:
+        with self._conn() as c:
+            r = c.execute("SELECT value FROM app_meta WHERE key=?",
+                          (key,)).fetchone()
+        return r["value"] if r else None
+
+    def meta_set(self, key: str, value: str) -> None:
+        with self._lock, self._conn() as c:
+            c.execute(
+                "INSERT INTO app_meta (key, value) VALUES (?,?)"
+                " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
