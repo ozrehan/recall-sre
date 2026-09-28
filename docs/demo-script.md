@@ -1,4 +1,4 @@
-# RecallSRE — 60-second demo script
+# TraceMind — 60-second demo script
 
 ## Setup (before recording)
 - `python3 backend/server.py`, open http://localhost:8080
@@ -31,7 +31,7 @@ root cause and the exact fix from last time, and recommends investigation
 steps. The longer the company uses it, the more valuable its memory becomes."
 
 **[0:55–1:00] The line.**
-"RecallSRE: every production incident teaches the agent how to handle the
+"TraceMind: every production incident teaches the agent how to handle the
 next one. Memory isn't a feature — it's the product."
 
 ## Backup beats (if time allows)
