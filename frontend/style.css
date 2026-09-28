@@ -410,3 +410,10 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
 #gsiBtn > div { width: 100% !important; }
 .auth-or { display: flex; align-items: center; gap: 12px; margin: 12px 0; color: var(--muted); font-size: 12.5px; }
 .auth-or::before, .auth-or::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+/* ---------- login-only panel: hide agent profile + activity until logged in ---------- */
+.actpanel.auth-mode .act-profile,
+.actpanel.auth-mode .act-tabs,
+.actpanel.auth-mode .act-day,
+.actpanel.auth-mode .act-list { display: none; }
+.actpanel.auth-mode .act-auth { margin-top: 18px; }
