@@ -64,13 +64,24 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
 /* ---------- main ---------- */
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .chathead {
-  display: flex; align-items: center; gap: 14px;
-  padding: 12px 20px; border-bottom: 1px solid var(--border); background: #fff;
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 14px;
+  padding: 10px 20px; border-bottom: 1px solid var(--border); background: #fff;
 }
-.burger { display: none; border: 1px solid var(--border); background: #fff; border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 15px; }
-.chead-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.chead-title b { font-size: 15px; }
-.chead-title span { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.burger { justify-self: start; border: 0; background: transparent; border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 20px; color: var(--ink); }
+.burger:hover { background: #f3f4f6; }
+.chead-brand { justify-self: center; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.chead-logo { width: 36px; height: 36px; border-radius: 9px; flex: none; }
+.chead-title { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.chead-title b { font-size: 16.5px; letter-spacing: .01em; }
+.chead-title span { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.chead-right { justify-self: end; display: flex; align-items: center; gap: 12px; }
+.chead-right .iconbtn { margin: 0; border: 0; font-size: 20px; color: #4b5563; }
+.avatarbtn {
+  width: 42px; height: 42px; border-radius: 50%; cursor: pointer;
+  border: 2px solid #e5e7eb; background: #fff; padding: 2px; flex: none;
+}
+.avatarbtn:hover { border-color: #111; }
+.avatarbtn img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
 .iconbtn {
   margin-left: 8px; border: 1px solid var(--border); background: #fff;
   border-radius: 999px; width: 36px; height: 36px; font-size: 17px; cursor: pointer;
@@ -78,7 +89,7 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
 }
 .iconbtn:hover { background: #f3f4f6; }
 .ghpill {
-  margin-left: auto; display: inline-flex; align-items: center; gap: 8px;
+  display: inline-flex; align-items: center; gap: 8px;
   border: 1px solid var(--border); background: #fff; border-radius: 999px;
   padding: 7px 14px; font-size: 12.5px; cursor: pointer; color: var(--ink);
   max-width: 46vw;
@@ -86,6 +97,7 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
 .ghpill:hover { background: #f3f4f6; }
 .ghpill .dot { width: 8px; height: 8px; border-radius: 50%; background: #16a34a; flex: none; }
 .ghpill span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ghpill.side { max-width: none; width: 100%; margin-top: 10px; justify-content: flex-start; }
 .chip-hint { font-size: 13px; color: var(--muted); padding: 6px 2px; }
 
 /* ---------- settings modal (ChatGPT-style) ---------- */
@@ -250,6 +262,8 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
   body.side-open .scrim { display: block; position: fixed; inset: 0; background: rgba(0,0,0,.3); z-index: 25; }
   .burger { display: block; }
   .chead-title span { display: none; }
+  .chead-logo { width: 30px; height: 30px; }
+  .avatarbtn { width: 36px; height: 36px; }
   .ghpill { max-width: 40vw; font-size: 11.5px; padding: 6px 10px; }
   .set-row { flex-direction: column; align-items: stretch; gap: 8px; }
   .set-input { width: 100%; }
