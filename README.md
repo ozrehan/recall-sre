@@ -1,11 +1,11 @@
-# RecallSRE 🧠
+# TraceMind
 
 **Live demo:** https://recall-sre.onrender.com
 
-**Turn every production incident into organizational memory.**
+**Turn incidents into insight.**
 
 An AI incident memory & response agent for SaaS engineering teams (5–50 engineers).
-When a production incident fires, RecallSRE searches your organization's incident
+When a production incident fires, TraceMind searches your organization's incident
 history in [Hindsight](https://hindsight.vectorize.io) — past error signatures,
 root causes, fixes, commands, MTTR — and recommends investigation steps drawn
 from what actually worked before.
