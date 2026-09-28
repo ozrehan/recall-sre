@@ -5,7 +5,7 @@
 Your team's most valuable debugging knowledge lives in people's heads — and
 walks out the door when they leave.
 
-For the Hindsight hackathon, I built RecallSRE: an incident response agent
+For the Hindsight hackathon, I built TraceMind: an incident response agent
 that turns every production incident into organizational memory.
 
 The demo I'm proudest of: a time-travel toggle. Day 1 with blank memory, the
@@ -20,7 +20,7 @@ Repo: https://github.com/ozrehan/recall-sre
 
 ## X / Twitter
 
-Built RecallSRE for the Hindsight hackathon 🧠
+Built TraceMind for the Hindsight hackathon 🧠
 
 An incident response agent with persistent memory: every production incident
 teaches it how to handle the next one.
