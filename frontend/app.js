@@ -89,12 +89,12 @@ function renderActAuth() {
       setTimeout(() => { const p = $("authPass"); if (p) p.focus(); }, 50);
     });
   }
-  renderGsiButton();
+  renderGsiButton("gsiBtn");
 }
 
 /* ---------- Google Sign-In (GIS) ---------- */
-function renderGsiButton() {
-  const slot = $("gsiBtn");
+function renderGsiButton(slotId) {
+  const slot = $(slotId);
   if (!slot || !googleClientId) return;
   if (window.google && google.accounts && google.accounts.id) {
     slot.innerHTML = "";
@@ -112,7 +112,7 @@ function renderGsiButton() {
     const s = document.createElement("script");
     s.src = "https://accounts.google.com/gsi/client";
     s.async = true; s.defer = true; s.dataset.gsi = "1";
-    s.onload = renderGsiButton;
+    s.onload = () => { renderGsiButton("gsiBtn"); renderGsiButton("gsiBtnSheet"); };
     document.head.appendChild(s);
   }
 }
@@ -126,35 +126,96 @@ async function onGoogleCredential(resp) {
       body: JSON.stringify({ credential: resp.credential }) });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || "Google sign-in failed");
-    localStorage.setItem("tm_token", data.token);
-    rememberUser(data.user);
-    authUser = data.user;
-    renderAuthSlot(); renderActAuth();
+    onAuthSuccess(data);
   } catch (e) {
     if (err) err.textContent = e.message;
   }
 }
 
-async function doAuthSubmit() {
-  const err = $("authErr"), go = $("authGo");
+async function submitAuth(pfx, mode) {
+  const err = $(pfx + "Err"), go = $(pfx + "Go");
   err.textContent = ""; go.disabled = true;
   try {
-    const body = { email: $("authEmail").value.trim(), password: $("authPass").value };
-    const path = authMode === "signup" ? "/api/auth/signup" : "/api/auth/login";
-    if (authMode === "signup") body.name = $("authName").value.trim();
+    const body = { email: $(pfx + "Email").value.trim(), password: $(pfx + "Pass").value };
+    const path = mode === "signup" ? "/api/auth/signup" : "/api/auth/login";
+    if (mode === "signup") body.name = $(pfx + "Name").value.trim();
     const r = await fetch(path, { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || "something went wrong");
-    localStorage.setItem("tm_token", data.token);
-    rememberUser(data.user);
-    authUser = data.user;
-    renderAuthSlot(); renderActAuth();
+    onAuthSuccess(data);
   } catch (e) {
     err.textContent = e.message;
   } finally {
     go.disabled = false;
   }
+}
+
+function onAuthSuccess(data) {
+  localStorage.setItem("tm_token", data.token);
+  rememberUser(data.user);
+  authUser = data.user;
+  renderAuthSlot(); renderActAuth(); closeLoginSheet();
+}
+
+async function doAuthSubmit() { submitAuth("auth", authMode); }
+
+/* ---------- login bottom sheet: pops up on site open, like ChatGPT ---------- */
+let sheetMode = "login";
+function openLoginSheet() {
+  renderLoginSheet();
+  $("loginSheet").classList.add("open");
+  $("sheetScrim").classList.add("show");
+}
+function closeLoginSheet() {
+  $("loginSheet").classList.remove("open");
+  $("sheetScrim").classList.remove("show");
+  try { sessionStorage.setItem("tm_sheet_off", "1"); } catch (e) {}
+}
+function renderLoginSheet() {
+  const box = $("loginSheet");
+  const lu = lastUser();
+  box.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" id="sheetClose" aria-label="Close">✕</button>
+    <div class="sheet-title">${lu ? "Welcome back" : "Log in to TraceMind"}</div>
+    <div class="sheet-sub">${lu ? "Choose an account to continue." : "Choose how you'd like to continue."}</div>
+    ${lu ? `<div class="g-account" id="sheetAccount" role="button" tabindex="0">
+      <span class="uavatar sm">${esc(initialOf(lu.name))}</span>
+      <span class="g-acc-meta"><b>${esc(lu.name)}</b><span>${esc(lu.email)}</span></span>
+      <span class="g-acc-x" id="sheetForget" title="Remove">✕</span>
+    </div>` : ""}
+    ${googleClientId ? `<div id="gsiBtnSheet"></div>` : ""}
+    ${(lu || googleClientId) ? `<div class="auth-or"><span>OR</span></div>` : ""}
+    <div class="auth-tabs">
+      <button data-m="login" class="${sheetMode === "login" ? "active" : ""}">Log in</button>
+      <button data-m="signup" class="${sheetMode === "signup" ? "active" : ""}">Sign up</button>
+    </div>
+    ${sheetMode === "signup" ? `<input id="shName" placeholder="Your name" autocomplete="name" maxlength="60">` : ""}
+    <input id="shEmail" type="email" placeholder="Email" autocomplete="email" value="${lu && sheetMode === "login" ? esc(lu.email) : ""}">
+    <input id="shPass" type="password" placeholder="Password${sheetMode === "signup" ? " (min 6 characters)" : ""}" autocomplete="${sheetMode === "signup" ? "new-password" : "current-password"}">
+    <button class="auth-go" id="shGo">${sheetMode === "signup" ? "Create account" : "Log in"}</button>
+    <p class="auth-err" id="shErr"></p>`;
+  $("sheetClose").addEventListener("click", closeLoginSheet);
+  box.querySelectorAll(".auth-tabs button").forEach((b) =>
+    b.addEventListener("click", () => { sheetMode = b.dataset.m; renderLoginSheet(); }));
+  $("shGo").addEventListener("click", () => submitAuth("sh", sheetMode));
+  ["shName", "shEmail", "shPass"].forEach((id) => {
+    const el = $(id);
+    if (el) el.addEventListener("keydown", (e) => { if (e.key === "Enter") submitAuth("sh", sheetMode); });
+  });
+  const row = $("sheetAccount");
+  if (row) row.addEventListener("click", (e) => {
+    if (e.target.id === "sheetForget") {
+      e.stopPropagation();
+      localStorage.removeItem("tm_last_user");
+      renderLoginSheet();
+      return;
+    }
+    sheetMode = "login"; renderLoginSheet();
+    setTimeout(() => { const p = $("shPass"); if (p) p.focus(); }, 80);
+  });
+  renderGsiButton("gsiBtnSheet");
 }
 
 async function doLogout() {
@@ -525,6 +586,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   } catch (e) {}
   await authMe();
   renderAuthSlot(); renderActAuth();
+  let sheetOff = false;
+  try { sheetOff = !!sessionStorage.getItem("tm_sheet_off"); } catch (e) {}
+  if (!authUser && !sheetOff) openLoginSheet();
   setInterval(refreshMemory, 60000);
   const inp = $("input");
   inp.addEventListener("input", () => {
@@ -549,7 +613,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("burger").addEventListener("click", () => document.body.classList.toggle("side-open"));
   $("scrim").addEventListener("click", () => document.body.classList.remove("side-open"));
   $("settingsBtn").addEventListener("click", () => setModal(true));
-  $("authSlot").addEventListener("click", () => { renderActAuth(); renderActivity(); setActPanel(true); });
+  $("authSlot").addEventListener("click", () => {
+    if (authUser) { renderActAuth(); renderActivity(); setActPanel(true); }
+    else openLoginSheet();
+  });
+  $("sheetScrim").addEventListener("click", closeLoginSheet);
   $("actClose").addEventListener("click", () => setActPanel(false));
   $("actScrim").addEventListener("click", () => setActPanel(false));
   $("actTabs").addEventListener("click", (e) => {
