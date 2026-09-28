@@ -99,7 +99,7 @@ function renderActAuth() {
       <span class="g-acc-x" id="gForget" title="Remove">✕</span>
     </div>` : ""}
     ${googleClientId ? `<div id="gsiBtn"></div>` : ""}
-    ${githubOauthConfigured ? `<button class="gh-login-btn" id="ghLoginBtn">${GH_SVG}<span>Continue with GitHub</span></button>` : ""}
+    ${githubOauthConfigured ? `<button class="gh-login-btn" id="ghLoginBtn">${GH_SVG}<span>Continue with GitHub</span></button><div class="gh-hint">Uses the GitHub account signed in on this browser</div>` : ""}
     ${(lu || googleClientId || githubOauthConfigured) ? `<div class="auth-or"><span>OR</span></div>` : ""}
     <div class="auth-tabs">
       <button data-m="login" class="${authMode === "login" ? "active" : ""}">Log in</button>
@@ -217,16 +217,32 @@ async function handleGithubLoginReturn() {
     const err = $("authErr"); if (err) err.textContent = "GitHub sign-in didn't complete — try again.";
     return;
   }
-  if (q.get("github") === "login" && q.get("token")) {
-    const tok = q.get("token");
+  if (q.get("github") === "nologin") {
     history.replaceState(null, "", location.pathname);
-    try {
-      const r = await fetch("/api/auth/me", { headers: { Authorization: "Bearer " + tok } });
-      if (!r.ok) throw new Error("bad token");
-      onAuthSuccess({ token: tok, user: (await r.json()).user });
-    } catch (e) {
-      const err = $("authErr"); if (err) err.textContent = "GitHub sign-in didn't complete — try again.";
-    }
+    const err = $("authErr"); if (err) err.textContent = "Log in to TraceMind first, then connect GitHub.";
+    openLoginSheet();
+    return;
+  }
+  if (q.get("github") === "login" && (q.get("code") || q.get("token"))) {
+    const code = q.get("code"), tok0 = q.get("token");
+    history.replaceState(null, "", location.pathname);
+    (async () => {
+      try {
+        let tok = tok0, user = null;
+        if (code) {
+          const r = await tmApi.post("/api/auth/oauth/consume", { code });
+          if (r.error || !r.token) throw new Error(r.error || "bad code");
+          tok = r.token; user = r.user;
+        } else {
+          const r = await fetch("/api/auth/me", { headers: { Authorization: "Bearer " + tok } });
+          if (!r.ok) throw new Error("bad token");
+          user = (await r.json()).user;
+        }
+        onAuthSuccess({ token: tok, user });
+      } catch (e) {
+        const err = $("authErr"); if (err) err.textContent = "GitHub sign-in didn't complete — try again.";
+      }
+    })();
   }
 }
 
@@ -258,7 +274,7 @@ function renderLoginSheet() {
       <span class="g-acc-x" id="sheetForget" title="Remove">✕</span>
     </div>` : ""}
     ${googleClientId ? `<div id="gsiBtnSheet"></div>` : ""}
-    ${githubOauthConfigured ? `<button class="gh-login-btn" id="ghLoginBtnSheet">${GH_SVG}<span>Continue with GitHub</span></button>` : ""}
+    ${githubOauthConfigured ? `<button class="gh-login-btn" id="ghLoginBtnSheet">${GH_SVG}<span>Continue with GitHub</span></button><div class="gh-hint">Uses the GitHub account signed in on this browser</div>` : ""}
     ${(lu || googleClientId || githubOauthConfigured) ? `<div class="auth-or"><span>OR</span></div>` : ""}
     <div class="auth-tabs">
       <button data-m="login" class="${sheetMode === "login" ? "active" : ""}">Log in</button>
