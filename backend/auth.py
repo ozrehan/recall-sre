@@ -90,6 +90,19 @@ def ensure_schema(conn) -> None:
                      "ON users(username)")
     except Exception:
         pass
+    # followers: who follows whom
+    try:
+        conn.execute("""CREATE TABLE IF NOT EXISTS follows (
+            follower_id INTEGER NOT NULL,
+            followed_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+            PRIMARY KEY (follower_id, followed_id))""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_follows_followed "
+                     "ON follows(followed_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_follows_follower "
+                     "ON follows(follower_id)")
+    except Exception:
+        pass
 
 
 def _hash_password(password: str) -> str:
@@ -506,6 +519,44 @@ def update_profile(conn, user_id: int, name=None, username=None,
         conn.execute(f"UPDATE users SET {', '.join(updates)} WHERE id=?",
                      params)
     return get_profile(conn, user_id)
+
+
+def follow(conn, follower_id: int, followed_id: int) -> dict:
+    """Follow a user. Returns fresh (followers, following) for the followed."""
+    ensure_schema(conn)
+    if follower_id == followed_id:
+        raise ValueError("you can't follow yourself")
+    if not conn.execute("SELECT 1 FROM users WHERE id=?",
+                        (followed_id,)).fetchone():
+        raise ValueError("no such profile")
+    conn.execute("INSERT OR IGNORE INTO follows(follower_id, followed_id)"
+                 " VALUES (?, ?)", (follower_id, followed_id))
+    return follow_counts(conn, followed_id)
+
+
+def unfollow(conn, follower_id: int, followed_id: int) -> dict:
+    ensure_schema(conn)
+    conn.execute("DELETE FROM follows WHERE follower_id=? AND followed_id=?",
+                 (follower_id, followed_id))
+    return follow_counts(conn, followed_id)
+
+
+def follow_counts(conn, user_id: int) -> dict:
+    ensure_schema(conn)
+    followers = conn.execute(
+        "SELECT COUNT(*) FROM follows WHERE followed_id=?",
+        (user_id,)).fetchone()[0]
+    following = conn.execute(
+        "SELECT COUNT(*) FROM follows WHERE follower_id=?",
+        (user_id,)).fetchone()[0]
+    return {"followers": followers, "following": following}
+
+
+def is_following(conn, follower_id: int, followed_id: int) -> bool:
+    ensure_schema(conn)
+    return bool(conn.execute(
+        "SELECT 1 FROM follows WHERE follower_id=? AND followed_id=?",
+        (follower_id, followed_id)).fetchone())
 
 
 def autofill_profile(conn, user_id: int, username=None,
