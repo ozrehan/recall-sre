@@ -16,8 +16,11 @@ The "time-travel" demo mode toggles between:
 
 Memory backend selection:
   - If HINDSIGHT_URL + HINDSIGHT_API_KEY are set and the hindsight SDK is
-    importable, HindsightMemoryStore is used.
+    importable, HindsightMemoryStore is used for semantic recall.
   - Otherwise LocalMemoryStore (TF-IDF) is used — the demo never breaks.
+  - Either way, every incident is ALSO stored in a local SQLite database
+    (backend/memory/db.py, DB_PATH env or backend/data/tracemind.db): the
+    queryable database of record plus an investigation audit log.
 """
 from __future__ import annotations
 
@@ -30,11 +33,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.agent.core import IncidentAgent
+from backend.memory.db import IncidentDB
+from backend.memory.hybrid_store import HybridMemoryStore
 from backend.memory.local_store import LocalMemoryStore
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.join(HERE, "..", "frontend")
 DATA_FILE = os.path.join(HERE, "data", "incidents.json")
+DB_PATH = os.environ.get("DB_PATH", os.path.join(HERE, "data", "tracemind.db"))
 
 MIME = {
     ".html": "text/html", ".css": "text/css", ".js": "application/javascript",
@@ -46,6 +52,7 @@ CLOUD_URL = "https://api.hindsight.vectorize.io"
 
 
 def build_memory():
+    """Semantic recall layer + SQLite database of record, as one store."""
     backend_name = "local"
     try:
         from backend.memory.hindsight_store import HindsightMemoryStore
@@ -55,12 +62,12 @@ def build_memory():
             # API key alone implies Hindsight Cloud.
             url = CLOUD_URL
         if url or key:
-            mem = HindsightMemoryStore(url=url or CLOUD_URL, api_key=key)
+            semantic = HindsightMemoryStore(url=url or CLOUD_URL, api_key=key)
             backend_name = "hindsight"
-            return mem, backend_name
+            return HybridMemoryStore(semantic, DB_PATH), backend_name
     except Exception as e:  # SDK missing / unreachable -> fall back
         print(f"[memory] hindsight unavailable ({e}); using local store")
-    return LocalMemoryStore(), backend_name
+    return HybridMemoryStore(LocalMemoryStore(), DB_PATH), backend_name
 
 
 def build_llm():
@@ -86,14 +93,17 @@ class State:
         mem, backend = build_memory()
         self.backend_name = backend
         llm = build_llm()
-        self.trained = LocalMemoryStore() if backend == "local" else mem
+        self.trained = mem  # HybridMemoryStore: SQLite db of record + semantic recall
         self.empty = LocalMemoryStore()
-        if backend == "local":
-            self.trained.seed(self.seed_incidents)
-        else:
-            # hindsight backend: seed once if empty
-            if mem.count() == 0:
-                mem.seed(self.seed_incidents)
+        # database of record: restore from incidents.json when the db is empty
+        # (Render's disk is ephemeral, so this runs on every fresh deploy)
+        if self.trained.db.count() == 0:
+            for inc in self.seed_incidents:
+                self.trained.db.upsert_incident(dict(inc), source="seed")
+        # semantic layer: seed only if it has nothing (Hindsight upsert is
+        # idempotent, but 28 retains on every boot would just add latency)
+        if self.trained.semantic.count() == 0:
+            self.trained.semantic.seed(self.seed_incidents)
         self.mode = "trained"
         self.agents = {
             "trained": IncidentAgent(self.trained, llm=llm),
@@ -135,21 +145,58 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path == "/api/health":
             m = STATE.memory()
+            db_size = m.db.count() if hasattr(m, "db") else 0
             return self._send(200, {
                 "ok": True, "backend": STATE.backend_name,
+                "database": "sqlite" if hasattr(m, "db") else "none",
                 "mode": STATE.mode, "memory_size": m.count(),
+                "db_size": db_size,
             })
         if path == "/api/incidents":
             return self._send(200, {"incidents": STATE.seed_incidents})
         if path == "/api/memory":
             m = STATE.memory()
-            recent = [m.get(i) for i in
-                      list(getattr(m, "_order", []))[-5:]][::-1]
-            recent = [r for r in recent if r]
+            if hasattr(m, "db"):
+                recent = m.db.recent(5)
+            else:
+                recent = [m.get(i) for i in
+                          list(getattr(m, "_order", []))[-5:]][::-1]
+                recent = [r for r in recent if r]
             return self._send(200, {
                 "backend": STATE.backend_name, "mode": STATE.mode,
                 "size": m.count(),
                 "recent": [{"id": r["id"], "title": r["title"]} for r in recent],
+            })
+        if path == "/api/db/stats":
+            db = STATE.trained.db
+            s = db.stats()
+            s["database"] = "sqlite"
+            return self._send(200, s)
+        if path == "/api/db/incidents":
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            try:
+                limit = min(int(qs.get("limit", ["50"])[0]), 200)
+            except ValueError:
+                limit = 50
+            try:
+                offset = max(int(qs.get("offset", ["0"])[0]), 0)
+            except ValueError:
+                offset = 0
+            service = (qs.get("service", [None])[0] or None)
+            db = STATE.trained.db
+            return self._send(200, {
+                "total": db.count(),
+                "incidents": db.list(limit=limit, offset=offset, service=service),
+            })
+        if path.startswith("/api/db/incident/"):
+            inc_id = urllib.parse.unquote(path[len("/api/db/incident/"):])
+            inc = STATE.trained.db.get(inc_id)
+            if inc:
+                return self._send(200, {"incident": inc})
+            return self._send(404, {"error": "incident not found"})
+        if path == "/api/db/investigations":
+            return self._send(200, {
+                "investigations": STATE.trained.db.recent_investigations(20),
             })
         # static files
         rel = path.lstrip("/") or "index.html"
@@ -209,7 +256,8 @@ def main():
     port = int(os.environ.get("PORT", 8080))
     srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"TraceMind on http://localhost:{port} "
-          f"(backend={STATE.backend_name}, memory={STATE.trained.count()})")
+          f"(backend={STATE.backend_name}, database=sqlite:{DB_PATH}, "
+          f"memory={STATE.trained.count()})")
     srv.serve_forever()
 
 
