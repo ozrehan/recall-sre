@@ -42,19 +42,37 @@ MIME = {
 }
 
 
+CLOUD_URL = "https://api.hindsight.vectorize.io"
+
+
 def build_memory():
     backend_name = "local"
     try:
         from backend.memory.hindsight_store import HindsightMemoryStore
         url = os.environ.get("HINDSIGHT_URL")
         key = os.environ.get("HINDSIGHT_API_KEY")
-        if url and key:
-            mem = HindsightMemoryStore(url=url, api_key=key)
+        if key and not url:
+            # API key alone implies Hindsight Cloud.
+            url = CLOUD_URL
+        if url or key:
+            mem = HindsightMemoryStore(url=url or CLOUD_URL, api_key=key)
             backend_name = "hindsight"
             return mem, backend_name
     except Exception as e:  # SDK missing / unreachable -> fall back
         print(f"[memory] hindsight unavailable ({e}); using local store")
     return LocalMemoryStore(), backend_name
+
+
+def build_llm():
+    """Optional Groq-backed briefing synthesizer (GROQ_API_KEY)."""
+    try:
+        from backend.llm.groq import GroqBriefing
+        key = os.environ.get("GROQ_API_KEY")
+        if key:
+            return GroqBriefing(api_key=key)
+    except Exception as e:
+        print(f"[llm] groq unavailable ({e}); using template briefings")
+    return None
 
 
 def load_seed():
@@ -67,6 +85,7 @@ class State:
         self.seed_incidents = load_seed()
         mem, backend = build_memory()
         self.backend_name = backend
+        llm = build_llm()
         self.trained = LocalMemoryStore() if backend == "local" else mem
         self.empty = LocalMemoryStore()
         if backend == "local":
@@ -77,7 +96,7 @@ class State:
                 mem.seed(self.seed_incidents)
         self.mode = "trained"
         self.agents = {
-            "trained": IncidentAgent(self.trained),
+            "trained": IncidentAgent(self.trained, llm=llm),
             "empty": IncidentAgent(self.empty),
         }
 
