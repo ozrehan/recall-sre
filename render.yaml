@@ -5,7 +5,7 @@ services:
     name: recall-sre
     runtime: python
     plan: free
-    buildCommand: "pip install -r requirements.txt || true"
+    buildCommand: "pip install --no-index --find-links=backend/vendor/wheels -r requirements.txt"
     startCommand: "python backend/server.py"
     envVars:
       - key: PYTHON_VERSION
