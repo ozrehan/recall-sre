@@ -47,6 +47,25 @@ def _put(url: str, token: str, data: dict) -> Any:
         return json.load(r)
 
 
+def test_connection(token: str | None) -> dict:
+    """Verify the token: who it is and what it can do. Never exposes it."""
+    if not token:
+        return {"connected": False, "reason": "no token configured"}
+    try:
+        req = urllib.request.Request(f"{API}/user", headers=_headers(token))
+        with urllib.request.urlopen(req, timeout=20) as r:
+            user = json.load(r)
+            scopes = r.headers.get("x-oauth-scopes", "")
+        return {
+            "connected": True,
+            "user": user.get("login"),
+            "scopes": [x.strip() for x in scopes.split(",") if x.strip()],
+            "can_write": any(x in scopes for x in ("repo", "public_repo")),
+        }
+    except Exception as e:
+        return {"connected": False, "reason": str(e)[:120]}
+
+
 # ---- read-only health -----------------------------------------------------
 
 def get_repo(repo: str, token: str | None) -> dict:
