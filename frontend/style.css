@@ -341,11 +341,12 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
 
 /* ---------- auth: login button, user avatar, panel auth card ---------- */
 .loginbtn {
-  background: #111; color: #fff; border: 0; border-radius: 999px;
-  padding: 10px 22px; font-size: 14.5px; font-weight: 600; cursor: pointer;
+  background: #fff; color: #111; border: 1px solid #e2e5ea; border-radius: 999px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.07);
+  padding: 10px 24px; font-size: 15px; font-weight: 600; cursor: pointer;
   flex: none; white-space: nowrap;
 }
-.loginbtn:hover { background: #000; }
+.loginbtn:hover { background: #f3f4f6; }
 .uavatar {
   width: 44px; height: 44px; border-radius: 50%; cursor: pointer; flex: none;
   border: 2px solid #e5e7eb; background: #111; color: #fff; padding: 0;
