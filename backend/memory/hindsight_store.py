@@ -71,9 +71,12 @@ class HindsightMemoryStore(MemoryStore):
     ):
         from hindsight_client import Hindsight
 
-        if not api_key:
-            raise ValueError("HINDSIGHT_API_KEY is required for the Hindsight backend")
-        self.client = Hindsight(base_url=url, api_key=api_key, timeout=60.0)
+        # api_key is optional: Hindsight Cloud requires one, but a
+        # self-hosted instance may run without auth.
+        kwargs: dict[str, Any] = {"base_url": url, "timeout": 60.0}
+        if api_key:
+            kwargs["api_key"] = api_key
+        self.client = Hindsight(**kwargs)
         self.bank_id = bank_id
         self._ensure_bank()
 
