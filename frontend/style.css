@@ -616,6 +616,15 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
 .pp-joined svg { width: 16px; height: 16px; }
 .pp-stats { display: flex; gap: 18px; margin-top: 12px; font-size: 15px; color: #888; }
 .pp-stats b { color: #111; font-weight: 700; margin-right: 5px; }
+.pp-followrow { display: flex; gap: 18px; margin-top: 10px; font-size: 15px; color: #888; }
+.pp-followrow b { color: #111; font-weight: 700; margin-right: 5px; }
+.pp-followbtn {
+  display: block; width: 100%; margin-top: 20px; padding: 12px;
+  border: 0; border-radius: 12px; background: #111;
+  color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;
+}
+.pp-followbtn.on { background: #fff; color: #111; border: 1px solid #ddd; }
+.pp-followbtn:hover { opacity: .92; }
 .pp-socials { display: flex; gap: 18px; margin-top: 16px; }
 .pp-socials a { color: #888; display: flex; }
 .pp-socials a:hover { color: #111; }
