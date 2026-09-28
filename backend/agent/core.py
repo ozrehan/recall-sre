@@ -123,7 +123,7 @@ class IncidentAgent:
         if self.llm:
             body = self.llm.synthesize_briefing(draft, matches)
         else:
-            body = (
+            body = self._memory_briefing(draft) or (
                 f"Incident {top_inc['id']} had the same error signature and "
                 f"similar symptoms. Its root cause was: {top_inc.get('root_cause', 'unknown')}. "
                 f"It was resolved in {top_inc.get('mttr_minutes', '?')} minutes by: "
@@ -145,6 +145,22 @@ class IncidentAgent:
                 "Verify before acting — similar symptoms can have different root causes."
             ),
         }
+
+    def _memory_briefing(self, draft: dict[str, Any]) -> str:
+        """LLM synthesis via Hindsight reflect — no extra API key needed.
+
+        The semantic store's briefing() runs an evidence-grounded LLM over
+        the incident bank (cites incident IDs, hedges like a hypothesis).
+        Returns "" when unavailable (e.g. local TF-IDF mode) so the caller
+        falls back to the template.
+        """
+        try:
+            query = f"{draft.get('title', '')} {draft.get('error_signature', '')}".strip()
+            text = self.memory.briefing(query)
+            return (text or "").strip()
+        except Exception as e:
+            print(f"[agent] memory briefing unavailable ({e})")
+            return ""
 
     # -- 4. learn ----------------------------------------------------------
     def resolve(
