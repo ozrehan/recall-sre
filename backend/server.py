@@ -847,11 +847,8 @@ class Handler(BaseHTTPRequestHandler):
                     if not reply:
                         raise RuntimeError("empty reply")
                     return self._send(200, {"reply": reply, "via": "groq"})
-                except Exception as e:
-                    return self._send(200, {
-                        "reply": "fallback", "via": "fallback",
-                        "debug": f"{type(e).__name__}: {e}"[:200],
-                    })
+                except Exception:
+                    pass  # fall through to the offline fallback below
             return self._send(200, {
                 "reply": ("I'm Trace \u2014 I turn your repo's incidents into organizational "
                           "memory. Paste an alert, an error, or a stack trace and I'll "
