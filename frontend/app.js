@@ -28,7 +28,34 @@ const lastUser = () => { try { return JSON.parse(localStorage.getItem("tm_last_u
 const initialOf = (name) => (String(name || "?").trim().charAt(0) || "?").toUpperCase();
 
 function rememberUser(u) {
-  localStorage.setItem("tm_last_user", JSON.stringify({ name: u.name, email: u.email }));
+  localStorage.setItem("tm_last_user", JSON.stringify({ name: u.name, email: u.email, provider: u.provider || "password" }));
+}
+
+/* One-tap Google sign-in for a remembered Google account: no password page. */
+function googleOneTap() {
+  const err = $("shErr") || $("authErr");
+  if (!googleClientId) { if (err) err.textContent = "Google sign-in isn't set up yet."; return; }
+  const launch = () => {
+    try {
+      google.accounts.id.initialize({ client_id: googleClientId, callback: onGoogleCredential, auto_select: true });
+      google.accounts.id.prompt();
+    } catch (e) {
+      if (err) err.textContent = "Couldn't open Google sign-in — use the Google button below.";
+    }
+  };
+  if (window.google && google.accounts && google.accounts.id) { launch(); return; }
+  if (err) err.textContent = "Loading Google sign-in…";
+  let s = document.querySelector('script[data-gsi]');
+  if (!s) {
+    s = document.createElement("script");
+    s.src = "https://accounts.google.com/gsi/client";
+    s.async = true; s.defer = true; s.dataset.gsi = "1";
+    document.head.appendChild(s);
+  }
+  s.addEventListener("load", () => {
+    if (err) err.textContent = "";
+    renderGsiButton("gsiBtn"); renderGsiButton("gsiBtnSheet"); launch();
+  }, { once: true });
 }
 
 function renderAuthSlot() {
@@ -91,6 +118,7 @@ function renderActAuth() {
         renderActAuth();
         return;
       }
+      if (lu.provider !== "password") { googleOneTap(); return; }
       authMode = "login"; renderActAuth();
       setTimeout(() => { const p = $("authPass"); if (p) p.focus(); }, 50);
     });
@@ -102,18 +130,20 @@ function renderActAuth() {
 function renderGsiButton(slotId) {
   const slot = $(slotId);
   if (!slot || !googleClientId) return;
-  if (window.google && google.accounts && google.accounts.id) {
+  const draw = () => {
     slot.innerHTML = "";
     google.accounts.id.initialize({
       client_id: googleClientId,
       callback: onGoogleCredential,
       auto_select: false,
     });
+    /* Google wants button width in pixels (200-400); "100%" falls back small. */
+    const w = Math.max(200, Math.min(400, slot.clientWidth || 320));
     google.accounts.id.renderButton(slot, {
-      theme: "outline", size: "large", width: "100%", text: "continue_with",
+      theme: "outline", size: "large", width: w, text: "continue_with",
     });
-    return;
-  }
+  };
+  if (window.google && google.accounts && google.accounts.id) { draw(); return; }
   if (!document.querySelector('script[data-gsi]')) {
     const s = document.createElement("script");
     s.src = "https://accounts.google.com/gsi/client";
@@ -218,6 +248,7 @@ function renderLoginSheet() {
       renderLoginSheet();
       return;
     }
+    if (lu.provider !== "password") { googleOneTap(); return; }
     sheetMode = "login"; renderLoginSheet();
     setTimeout(() => { const p = $("shPass"); if (p) p.focus(); }, 80);
   });
