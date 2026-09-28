@@ -1,36 +1,45 @@
 # TraceMind
 
-**Live demo:** https://tracemind-szuq.onrender.com
+**Live:** https://tracemind-szuq.onrender.com
 
 **Turn incidents into insight.**
 
 An AI incident memory & response agent for SaaS engineering teams (5–50 engineers).
-When a production incident fires, TraceMind searches your organization's incident
-history in [Hindsight](https://hindsight.vectorize.io) — past error signatures,
-root causes, fixes, commands, MTTR — and recommends investigation steps drawn
-from what actually worked before.
+TraceMind watches your GitHub repo's issues, treats them as live incidents, and
+investigates each one against your organization's incident history in
+[Hindsight](https://hindsight.vectorize.io) — past error signatures, root
+causes, fixes, commands, MTTR — recommending investigation steps drawn from
+what actually worked before.
 
 > **Every production incident teaches the agent how to handle the next one.**
 
-## The core loop
+## How it works (real pipeline, no demo data)
 
 ```
-NEW INCIDENT
-     ↓
-analyze symptoms → search Hindsight memory → similar past incidents (ranked)
-     ↓
-recommend: likely causes + investigation steps (never false certainty)
-     ↓
-engineer resolves → post-mortem retained back into memory
-     ↓
-NEXT INCIDENT = SMARTER
+GitHub issue opened ──sync──▶ TraceMind incident ──recall──▶ similar past incidents
+        │                                                        │
+        │ closed on GitHub                                       ▼
+        └──────────▶ resolved + post-mortem learned ──retain──▶ Hindsight memory
 ```
+
+1. **Sync** — every few minutes TraceMind polls the connected repo
+   (`GITHUB_REPO`, changeable in Settings). New issues become open incidents;
+   closed issues become resolved incidents with MTTR computed from timestamps.
+2. **Investigate** — pick an open issue (or describe your own incident) and the
+   agent searches Hindsight memory for similar past incidents, ranked by
+   relevance, with the fixes that worked before.
+3. **Recommend** — likely causes + ordered investigation steps, phrased as
+   evidence-backed hypotheses. With `GITHUB_TOKEN` set, the recommendation is
+   also posted as a comment on the issue.
+4. **Resolve & teach** — store the root cause + fix; it's retained to memory,
+   so the next similar incident starts smarter. A resolution made in TraceMind
+   is never overwritten by later GitHub edits.
 
 The agent **never claims certainty**. It reports matches as *"87% similar to
-INC-0047"* and recommends *next investigation steps* — because similar symptoms
+GH-1042"* and recommends *next investigation steps* — because similar symptoms
 can have different root causes. That honesty is the product.
 
-## How Hindsight memory is used (hackathon submission)
+## How Hindsight memory is used
 
 | Agent step | Hindsight operation |
 |---|---|
@@ -39,14 +48,10 @@ can have different root causes. That honesty is the product.
 | Engineer resolves | `retain()` — the post-mortem (signature, symptoms, root cause, steps, commands, fix, MTTR) becomes a new memory, `document_id="incident-<id>"` (idempotent) |
 | Learning over time | Observations auto-consolidate: *"payment-api 500s after deploys → connection-pool exhaustion (3 incidents)"* |
 
-The demo's **time-travel toggle** (Day 1 blank memory vs Day 120 trained memory)
-makes the learning curve visible: same incident, generic answer vs
-memory-backed recommendation. That is the 25% memory criterion, on screen.
-
 ## Quickstart (no credentials needed)
 
-Zero dependencies — pure Python 3 stdlib. The demo runs on a local
-TF-IDF memory store with the identical interface, so it works offline.
+Zero dependencies — pure Python 3 stdlib. Without a Hindsight key it runs on a
+local TF-IDF memory store with the identical interface, so it works offline.
 
 ```bash
 git clone https://github.com/ozrehan/recall-sre
@@ -55,60 +60,63 @@ python3 backend/server.py
 # open http://localhost:8080
 ```
 
-Fire an incident from the scenario picker, read the memory matches, then resolve
-it with a root cause + fix — watch the memory counter grow. Flip the
-🕰 time-travel toggle to compare Day 1 vs Day 120.
+Open **Settings** (⚙) to point at your repo and hit **Sync now** — issues appear
+as live incidents. Investigate one, resolve it with a root cause + fix, and
+watch the memory counter grow.
 
-## Using real Hindsight (Cloud)
+## Configuration
 
-1. Sign up at https://ui.hindsight.vectorize.io/signup
-2. In billing, apply promo code **`MEMHACK99`** for $50 in credits
-3. Create an API key, then:
+| Env var | Default | Purpose |
+|---|---|---|
+| `GITHUB_REPO` | `ozrehan/recall-sre` | repo whose issues become incidents (`owner/name`) |
+| `GITHUB_SYNC_MINUTES` | `5` | poll interval |
+| `GITHUB_TOKEN` | — | private repos + post recommendations as issue comments |
+| `HINDSIGHT_API_KEY` | — | Hindsight Cloud (URL defaults to Cloud when key is set) |
+| `HINDSIGHT_BANK_ID` | `incident-memory-prod` | memory bank for real incidents |
+| `GROQ_API_KEY` | — | optional LLM-synthesized briefings (free tier at groq.com) |
+| `DB_PATH` | `backend/data/tracemind.db` | SQLite database of record |
 
-```bash
-pip install hindsight-client
-export HINDSIGHT_API_KEY="hsk_..."   # Cloud URL is the default; no HINDSIGHT_URL needed
-python3 scripts/seed_hindsight.py   # loads the 28 historical incidents
-python3 backend/server.py           # badge flips to "memory: hindsight"
-```
-
-Optional: `GROQ_API_KEY=<redacted> for LLM-synthesized recommendation briefings
-(free tier at https://groq.com). Without it, the agent uses template briefings.
-
-Or self-host: `docker run -p 8888:8888 -e HINDSIGHT_API_LLM_API_KEY=<key> ghcr.io/vectorize-io/hindsight:latest`
-and point `HINDSIGHT_URL=http://localhost:8888` (no API key needed locally).
+Settings changed in the UI (repo, sync interval) persist in SQLite. A GitHub
+token can also be added via `GITHUB_TOKEN` for private repos.
 
 ## API
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/api/health` | `{ok, backend, mode, memory_size}` |
-| GET | `/api/incidents` | seeded incident catalog |
+| GET | `/api/health` | `{ok, backend, memory_size, github{...}}` |
+| GET | `/api/incidents` | real incidents from the database, open first |
 | POST | `/api/investigate` | `{alert}` → `{incident, matches, recommendation}` |
 | POST | `/api/resolve` | store post-mortem → `{id, memory_size}` |
-| POST | `/api/mode` | `{mode: "trained"‖"empty"}` — time travel |
 | GET | `/api/memory` | `{backend, size, recent}` |
+| GET | `/api/settings` | current settings |
+| POST | `/api/settings` | `{github_repo?, sync_minutes?}` |
+| POST | `/api/settings/clear-db` | wipe local incidents (re-sync from GitHub) |
+| GET | `/api/integrations/github` | sync status for the connected repo |
+| POST | `/api/integrations/github/sync` | run a sync pass now |
 
 ## Project structure
 
 ```
 recall-sre/
 ├── backend/
-│   ├── server.py            # stdlib HTTP server + JSON API (no deps)
-│   ├── agent/core.py        # analyze → recall → recommend → learn loop
+│   ├── server.py              # stdlib HTTP server + JSON API (no deps)
+│   ├── agent/core.py          # analyze → recall → recommend → learn loop
+│   ├── integrations/
+│   │   ├── github_issues.py   # GitHub API client + issue→incident mapping
+│   │   └── sync.py            # the live sync pipeline
 │   ├── memory/
-│   │   ├── base.py          # MemoryStore interface (+ score_label)
-│   │   ├── local_store.py   # TF-IDF fallback, zero deps
+│   │   ├── base.py            # MemoryStore interface (+ score_label)
+│   │   ├── db.py              # SQLite database of record + sync state
+│   │   ├── hybrid_store.py    # SQLite + semantic recall as one store
+│   │   ├── local_store.py     # TF-IDF fallback, zero deps
 │   │   └── hindsight_store.py # real Hindsight adapter (retain/recall/reflect)
-│   └── data/incidents.json  # 28 realistic synthetic incidents
-├── frontend/                # dashboard: live incident, memory match, recommendation
-├── scripts/
-│   ├── generate_incidents.py
-│   └── seed_hindsight.py
-└── docs/                    # demo script, article draft, social post
+│   └── data/incidents.json    # dev fixture (not auto-loaded)
+├── frontend/                  # chat UI + ChatGPT-style settings
+└── render.yaml                # Render blueprint
 ```
 
 ## Tech
 
 Python 3 (stdlib server), vanilla JS dashboard, Hindsight (memory layer),
-optional Groq LLM for briefing synthesis. MIT licensed.
+GitHub Issues (incident source), optional Groq LLM for briefing synthesis.
+MIT licensed.
