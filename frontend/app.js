@@ -13,6 +13,91 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
+/* ---------- auth: login before profile ---------- */
+let authUser = null;
+let authMode = "login";
+const tmToken = () => localStorage.getItem("tm_token") || "";
+const initialOf = (name) => (String(name || "?").trim().charAt(0) || "?").toUpperCase();
+
+function renderAuthSlot() {
+  const slot = $("authSlot");
+  if (authUser) {
+    slot.innerHTML = `<button class="uavatar" id="avatarBtn" title="${esc(authUser.name)}">${esc(initialOf(authUser.name))}</button>`;
+  } else {
+    slot.innerHTML = `<button class="loginbtn" id="loginBtn">Log in</button>`;
+  }
+}
+
+function renderActAuth() {
+  const box = $("actAuth");
+  if (!box) return;
+  if (authUser) {
+    box.innerHTML = `<div class="auth-card"><div class="user-chip">
+      <div class="uavatar">${esc(initialOf(authUser.name))}</div>
+      <div class="user-meta"><b>${esc(authUser.name)}</b><span>${esc(authUser.email)}</span></div>
+      <button class="logoutbtn" id="logoutBtn">Log out</button>
+    </div></div>`;
+    $("logoutBtn").addEventListener("click", doLogout);
+    return;
+  }
+  box.innerHTML = `<div class="auth-card">
+    <div class="auth-tabs">
+      <button data-m="login" class="${authMode === "login" ? "active" : ""}">Log in</button>
+      <button data-m="signup" class="${authMode === "signup" ? "active" : ""}">Sign up</button>
+    </div>
+    ${authMode === "signup" ? `<input id="authName" placeholder="Your name" autocomplete="name" maxlength="60">` : ""}
+    <input id="authEmail" type="email" placeholder="Email" autocomplete="email">
+    <input id="authPass" type="password" placeholder="Password${authMode === "signup" ? " (min 6 characters)" : ""}" autocomplete="${authMode === "signup" ? "new-password" : "current-password"}">
+    <button class="auth-go" id="authGo">${authMode === "signup" ? "Create account" : "Log in"}</button>
+    <p class="auth-err" id="authErr"></p>
+  </div>`;
+  box.querySelectorAll(".auth-tabs button").forEach((b) =>
+    b.addEventListener("click", () => { authMode = b.dataset.m; renderActAuth(); }));
+  $("authGo").addEventListener("click", doAuthSubmit);
+  ["authName", "authEmail", "authPass"].forEach((id) => {
+    const el = $(id);
+    if (el) el.addEventListener("keydown", (e) => { if (e.key === "Enter") doAuthSubmit(); });
+  });
+}
+
+async function doAuthSubmit() {
+  const err = $("authErr"), go = $("authGo");
+  err.textContent = ""; go.disabled = true;
+  try {
+    const body = { email: $("authEmail").value.trim(), password: $("authPass").value };
+    const path = authMode === "signup" ? "/api/auth/signup" : "/api/auth/login";
+    if (authMode === "signup") body.name = $("authName").value.trim();
+    const r = await fetch(path, { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || "something went wrong");
+    localStorage.setItem("tm_token", data.token);
+    authUser = data.user;
+    renderAuthSlot(); renderActAuth();
+  } catch (e) {
+    err.textContent = e.message;
+  } finally {
+    go.disabled = false;
+  }
+}
+
+async function doLogout() {
+  try { await fetch("/api/auth/logout", { method: "POST" }); } catch (e) {}
+  localStorage.removeItem("tm_token");
+  authUser = null;
+  renderAuthSlot(); renderActAuth();
+}
+
+async function authMe() {
+  const t = tmToken();
+  if (!t) return;
+  try {
+    const r = await fetch("/api/auth/me", { headers: { Authorization: "Bearer " + t } });
+    if (r.ok) authUser = (await r.json()).user;
+    else localStorage.removeItem("tm_token");
+  } catch (e) {}
+}
+
 /* ---------- chat primitives ---------- */
 function scrollBottom() { $("chat").scrollTop = $("chat").scrollHeight; }
 
@@ -358,6 +443,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   welcome();
   loadIncidents();
   refreshMemory();
+  await authMe();
+  renderAuthSlot(); renderActAuth();
   setInterval(refreshMemory, 60000);
   const inp = $("input");
   inp.addEventListener("input", () => {
@@ -382,7 +469,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("burger").addEventListener("click", () => document.body.classList.toggle("side-open"));
   $("scrim").addEventListener("click", () => document.body.classList.remove("side-open"));
   $("settingsBtn").addEventListener("click", () => setModal(true));
-  $("avatarBtn").addEventListener("click", () => { renderActivity(); setActPanel(true); });
+  $("authSlot").addEventListener("click", () => { renderActAuth(); renderActivity(); setActPanel(true); });
   $("actClose").addEventListener("click", () => setActPanel(false));
   $("actScrim").addEventListener("click", () => setActPanel(false));
   $("actTabs").addEventListener("click", (e) => {
