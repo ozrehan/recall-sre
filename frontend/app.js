@@ -411,8 +411,26 @@ const tmApi = {
 async function refreshGithubPanel() {
   try {
     const st = await tmApi.get("/api/plugins/status");
-    $("ghRepoLine").textContent = st.github_repo || "—";
-    $("ghRepoLink").href = st.repo_url || "#";
+    const repos = st.repos || (st.github_repo ? [st.github_repo] : []);
+    $("ghRepoList").innerHTML = repos.length ? repos.map((r) => `
+      <div class="repo-row"><span>${esc(r)}</span>
+        <button data-repo="${esc(r)}" title="Remove">✕</button></div>`).join("")
+      : `<p class="plug-sub">No repos connected yet.</p>`;
+    document.querySelectorAll("#ghRepoList button[data-repo]").forEach((b) => {
+      b.addEventListener("click", async () => {
+        await tmApi.post("/api/github/repos/remove", {repo: b.dataset.repo});
+        refreshGithubPanel();
+      });
+    });
+    const mode = st.access_mode || "write";
+    document.querySelectorAll("#ghModePills button").forEach((b) => {
+      b.classList.toggle("active", b.dataset.mode === mode);
+    });
+    $("ghModeSub").textContent = mode === "write"
+      ? "Read & Write: Trace can open pull requests to fix problems."
+      : "Read only: Trace watches and reports, but never changes your repos.";
+    const firstRepo = repos[0] || st.github_repo;
+    $("ghRepoLink").href = firstRepo ? "https://github.com/" + firstRepo : "#";
     const gc = st.github_connection || {};
     const perms = gc.repo_permissions || {};
     if (gc.connected) {
@@ -475,13 +493,19 @@ function bindPanels() {
   $("ghScrim").addEventListener("click", () => setPanel("ghPanel", "ghScrim", false));
   $("plugClose").addEventListener("click", () => setPanel("plugPanel", "plugScrim", false));
   $("plugScrim").addEventListener("click", () => setPanel("plugPanel", "plugScrim", false));
+  document.querySelectorAll("#ghModePills button").forEach((b) => {
+    b.addEventListener("click", async () => {
+      await tmApi.post("/api/github/mode", {mode: b.dataset.mode});
+      refreshGithubPanel(); refreshPluginsPanel();
+    });
+  });
   $("ghConnectBtn").addEventListener("click", async () => {
     const repo = $("ghRepoInput").value.trim();
     if (!repo) return;
     $("ghConnectBtn").textContent = "…";
-    const r = await tmApi.post("/api/settings", {github_repo: repo});
-    $("ghConnectBtn").textContent = "Connect";
-    if (r.github_repo) { $("ghRepoInput").value = ""; refreshGithubPanel(); }
+    const r = await tmApi.post("/api/github/repos/add", {repo});
+    $("ghConnectBtn").textContent = "Add";
+    if (r.repos) { $("ghRepoInput").value = ""; refreshGithubPanel(); }
     else alert(r.error || "Could not connect");
   });
   $("ghScanBtn").addEventListener("click", async () => {
