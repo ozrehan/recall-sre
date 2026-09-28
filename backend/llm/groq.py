@@ -18,7 +18,7 @@ MODEL = "qwen/qwen3-32b"  # fast, generous free tier; swap via GROQ_MODEL
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 SYSTEM = (
-    "You are RecallSRE, an SRE assistant. You MUST ground every claim in the "
+    "You are TraceMind, an SRE assistant. You MUST ground every claim in the "
     "past incidents provided. Cite incident IDs. Frame recommendations as "
     "hypotheses, never certainties: explicitly warn that similar symptoms can "
     "have different root causes. Keep it under 120 words, plain language, "
