@@ -92,6 +92,9 @@ def groq_chat(api_key: str, system: str, user: str,
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            # Groq sits behind Cloudflare, which 403s Python's default
+            # urllib User-Agent as a bot before auth is even checked.
+            "User-Agent": "TraceMind/1.0",
         },
         method="POST",
     )
@@ -125,6 +128,9 @@ class GroqBriefing:
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
+                # Groq sits behind Cloudflare, which 403s Python's default
+                # urllib User-Agent as a bot before auth is even checked.
+                "User-Agent": "TraceMind/1.0",
             },
             method="POST",
         )
