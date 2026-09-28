@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
@@ -32,6 +33,25 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+"""
+
+# Per-user GitHub connection: each TraceMind user connects their OWN repo(s)
+# with their OWN OAuth token. Replaces the old global github_oauth_token /
+# github_repos / github_access_mode meta keys (migrated on first use).
+GITHUB_SCHEMA = """
+CREATE TABLE IF NOT EXISTS user_github (
+  user_id      INTEGER PRIMARY KEY,
+  github_token TEXT DEFAULT '',
+  repos        TEXT DEFAULT '[]',
+  access_mode  TEXT DEFAULT 'write',
+  updated_at   TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS github_oauth_nonce (
+  nonce      TEXT PRIMARY KEY,
+  user_id    INTEGER NOT NULL,
+  created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
 """
 
 _ITERATIONS = 200_000
@@ -50,6 +70,11 @@ def ensure_schema(conn) -> None:
         pass
     try:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_github ON users(github_id)")
+    except Exception:
+        pass
+    # per-user GitHub connections (token + repos + access mode)
+    try:
+        conn.executescript(GITHUB_SCHEMA)
     except Exception:
         pass
 
@@ -279,3 +304,110 @@ def github_login(conn, access_token: str) -> dict:
         user = _public(row)
     user["provider"] = "github"
     return {"token": issue_token(user["id"]), "user": user}
+
+
+# ---------- per-user GitHub connection ----------
+
+def _gh_row(conn, user_id: int):
+    ensure_schema(conn)
+    return conn.execute(
+        "SELECT github_token, repos, access_mode FROM user_github WHERE user_id=?",
+        (user_id,)).fetchone()
+
+
+def get_user_github(conn, user_id: int) -> dict:
+    """This user's GitHub connection: token, repos, access_mode."""
+    row = _gh_row(conn, user_id)
+    if not row:
+        return {"token": "", "repos": [], "access_mode": "write"}
+    try:
+        repos = json.loads(row[1] or "[]")
+        if not isinstance(repos, list):
+            repos = []
+    except Exception:
+        repos = []
+    return {"token": row[0] or "", "repos": repos,
+            "access_mode": row[2] or "write"}
+
+
+def set_user_github_token(conn, user_id: int, token: str) -> dict:
+    ensure_schema(conn)
+    conn.execute(
+        """INSERT INTO user_github (user_id, github_token, updated_at)
+           VALUES (?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+           ON CONFLICT(user_id) DO UPDATE SET
+             github_token=excluded.github_token,
+             updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')""",
+        (user_id, token or ""))
+    return get_user_github(conn, user_id)
+
+
+def set_user_github_repos(conn, user_id: int, repos: list) -> dict:
+    ensure_schema(conn)
+    conn.execute(
+        """INSERT INTO user_github (user_id, repos, updated_at)
+           VALUES (?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+           ON CONFLICT(user_id) DO UPDATE SET
+             repos=excluded.repos,
+             updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')""",
+        (user_id, json.dumps(repos or [])))
+    return get_user_github(conn, user_id)
+
+
+def set_user_github_mode(conn, user_id: int, mode: str) -> dict:
+    ensure_schema(conn)
+    mode = "write" if mode == "write" else "read"
+    conn.execute(
+        """INSERT INTO user_github (user_id, access_mode, updated_at)
+           VALUES (?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+           ON CONFLICT(user_id) DO UPDATE SET
+             access_mode=excluded.access_mode,
+             updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')""",
+        (user_id, mode))
+    return get_user_github(conn, user_id)
+
+
+def clear_user_github(conn, user_id: int) -> None:
+    ensure_schema(conn)
+    conn.execute("DELETE FROM user_github WHERE user_id=?", (user_id,))
+
+
+def create_github_nonce(conn, user_id: int) -> str:
+    """One-time nonce tying the OAuth redirect back to the logged-in user."""
+    ensure_schema(conn)
+    nonce = secrets.token_urlsafe(24)
+    conn.execute("DELETE FROM github_oauth_nonce WHERE user_id=?", (user_id,))
+    conn.execute("INSERT INTO github_oauth_nonce (nonce, user_id) VALUES (?,?)",
+                 (nonce, user_id))
+    return nonce
+
+
+def consume_github_nonce(conn, nonce: str):
+    """Return the user_id for a nonce (single use, 15-min expiry), else None."""
+    ensure_schema(conn)
+    row = conn.execute(
+        "SELECT user_id, created_at FROM github_oauth_nonce WHERE nonce=?",
+        (nonce or "",)).fetchone()
+    if not row:
+        return None
+    conn.execute("DELETE FROM github_oauth_nonce WHERE nonce=?", (nonce,))
+    try:
+        import datetime as _dt
+        created = _dt.datetime.strptime(
+            row[1], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_dt.timezone.utc)
+        age = (_dt.datetime.now(_dt.timezone.utc) - created).total_seconds()
+        if age > 900:
+            return None
+    except Exception:
+        return None
+    return row[0]
+
+
+def users_with_github(conn) -> list:
+    """All user_ids that have a GitHub token (for background loops)."""
+    ensure_schema(conn)
+    try:
+        return [r[0] for r in conn.execute(
+            "SELECT user_id FROM user_github WHERE github_token<>''")]
+    except Exception:
+        return []
