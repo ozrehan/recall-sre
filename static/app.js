@@ -1,4 +1,4 @@
-/* RecallSRE static demo — the entire memory loop runs in the browser.
+/* TraceMind static demo — the entire memory loop runs in the browser.
    Same TF-IDF memory + agent logic as the Python backend, zero server needed.
    INCIDENTS is injected via incidents.js (generated from incidents.json). */
 const $ = (id) => document.getElementById(id);
