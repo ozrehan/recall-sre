@@ -184,7 +184,7 @@ class HindsightMemoryStore(MemoryStore):
             resp = self.client.list_memories(
                 self.bank_id, search_query=f"incident-{incident_id}", limit=10
             )
-            units = getattr(resp, "memories", None) or getattr(resp, "results", None) or []
+            units = getattr(resp, "items", None) or []
             for u in units:
                 meta = getattr(u, "metadata", None) or {}
                 if meta.get("incident_json"):
@@ -201,7 +201,7 @@ class HindsightMemoryStore(MemoryStore):
     def count(self) -> int:
         try:
             resp = self.client.list_memories(self.bank_id, limit=1000)
-            units = getattr(resp, "memories", None) or getattr(resp, "results", None) or []
+            units = getattr(resp, "items", None) or []
             docs = {getattr(u, "document_id", None) for u in units}
             docs.discard(None)
             return len(docs)
