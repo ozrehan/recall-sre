@@ -14,7 +14,16 @@ import json
 import urllib.request
 from typing import Any
 
-MODEL = "llama-3.3-70b-versatile"  # fast, generous free tier; swap via GROQ_MODEL
+# Groq retires models often; groq_chat tries each in order and uses the first
+# one that answers. Swap via GROQ_MODEL env if you want to pin one.
+MODELS = [
+    "llama-3.1-8b-instant",
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "qwen/qwen3-32b",
+    "llama-3.3-70b-versatile",
+]
+MODEL = MODELS[0]
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 SYSTEM = (
@@ -73,8 +82,26 @@ CHAT_SYSTEM = (
 
 
 def groq_chat(api_key: str, system: str, user: str,
-              model: str = MODEL, max_tokens: int = 350) -> str:
-    """One-shot chat completion via Groq's OpenAI-compatible API."""
+              model: str | None = None, max_tokens: int = 350) -> str:
+    """One-shot chat completion via Groq's OpenAI-compatible API.
+
+    Tries each known model in order; Groq retires models often, so a 404
+    (model gone) just moves to the next candidate instead of failing.
+    """
+    candidates = [model] if model else list(MODELS)
+    last_err: Exception | None = None
+    for cand in candidates:
+        try:
+            return _groq_chat_once(api_key, system, user, cand, max_tokens)
+        except RuntimeError as e:
+            if "404" not in str(e) and "does not exist" not in str(e):
+                raise
+            last_err = e
+    raise last_err or RuntimeError("no Groq model available")
+
+
+def _groq_chat_once(api_key: str, system: str, user: str,
+                    model: str, max_tokens: int) -> str:
     payload = json.dumps(
         {
             "model": model,
