@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RecallSRE demo server — stdlib only, zero dependencies.
+"""TraceMind demo server — stdlib only, zero dependencies.
 
 Serves the frontend dashboard and exposes the agent API:
 
@@ -111,7 +111,7 @@ STATE = State()
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "RecallSRE/1.0"
+    server_version = "TraceMind/1.0"
 
     def log_message(self, *a):
         pass
@@ -208,7 +208,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     port = int(os.environ.get("PORT", 8080))
     srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
-    print(f"RecallSRE on http://localhost:{port} "
+    print(f"TraceMind on http://localhost:{port} "
           f"(backend={STATE.backend_name}, memory={STATE.trained.count()})")
     srv.serve_forever()
 
