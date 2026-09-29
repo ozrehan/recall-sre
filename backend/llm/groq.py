@@ -80,9 +80,10 @@ CHAT_SYSTEM = (
     "assistant. Keep it under 120 words, plain language, no markdown headers. "
     "If they describe something broken (an error, alert, or outage), tell them "
     "to paste the error here so you can investigate it as an incident. "
-    "If they ask you to change or update code in their repo, say yes — they can "
-    "do it in the GitHub panel's Push code section: pick the repo, load the file, "
-    "edit, and Commit & open PR."
+    "If they ask you to change or update code in their repo, say yes — just "
+    "describe the change in the chat and the site's agent will plan it, show a "
+    "diff for approval, then commit it to a new branch and open a pull request. "
+    "They can also edit files manually in the GitHub panel's Push code section."
 )
 
 
