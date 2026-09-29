@@ -24,6 +24,10 @@ Environment:
   HINDSIGHT_BANK_ID  memory bank (default incident-memory-prod)
   GROQ_API_KEY       optional briefing synthesizer
   DB_PATH            sqlite file (default backend/data/tracemind.db)
+  TURSO_DATABASE_URL optional: libsql:// URL for a Turso database — when set,
+                     ALL data (users, logins, incidents) lives in Turso and
+                     survives Render's ephemeral filesystem across deploys
+  TURSO_AUTH_TOKEN   auth token for the Turso database
   GITHUB_SYNC_MINUTES poll interval (default 5)
 """
 from __future__ import annotations
@@ -53,7 +57,7 @@ from backend.plugins import sentinel as _sentinel
 from backend.plugins import autofix as _autofix
 from backend.plugins import github_api as _gh_api
 from backend.integrations import github_issues as gh_api
-from backend.memory.db import IncidentDB
+from backend.memory.db import IncidentDB, _db_label
 from backend.memory.hybrid_store import HybridMemoryStore
 from backend.memory.local_store import LocalMemoryStore
 
@@ -1352,7 +1356,7 @@ def main():
     port = int(os.environ.get("PORT", 8080))
     srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"TraceMind on http://localhost:{port} "
-          f"(backend={STATE.backend_name}, database=sqlite:{DB_PATH}, "
+          f"(backend={STATE.backend_name}, database={_db_label(DB_PATH)}, "
           f"github={STATE.github_repo}, bank={BANK_ID})")
     srv.serve_forever()
 
