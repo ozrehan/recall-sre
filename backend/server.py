@@ -110,6 +110,10 @@ GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GITHUB_CLIENT_ID = os.environ.get("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "")
 SYNC_MINUTES = int(os.environ.get("GITHUB_SYNC_MINUTES", "5") or 5)
+# Admin dashboard: comma-separated emails that may view site-wide stats.
+ADMIN_EMAILS = {e.strip().lower()
+                for e in os.environ.get("ADMIN_EMAILS", "").split(",")
+                if e.strip()}
 
 
 def build_memory():
@@ -543,6 +547,35 @@ class Handler(BaseHTTPRequestHandler):
         if not uid:
             self._send(401, {"error": "login required"})
             return None
+        # presence: mark the user as seen (throttled to 1/min in SQL)
+        try:
+            db = STATE.memory.db
+            with db._lock, db._conn() as c:
+                auth_mod.touch_seen(c, uid)
+        except Exception:
+            pass
+        return uid
+
+    def _client_ip(self):
+        fwd = self.headers.get("X-Forwarded-For") or ""
+        if fwd:
+            return fwd.split(",")[0].strip()
+        return self.client_address[0]
+
+    def _require_admin(self):
+        """Logged-in user id, only if their email is in ADMIN_EMAILS."""
+        uid = self._require_uid()
+        if not uid:
+            return None
+        try:
+            db = STATE.memory.db
+            with db._lock, db._conn() as c:
+                user = auth_mod.get_user(c, uid)
+        except Exception:
+            user = None
+        if not user or (user.get("email") or "").lower() not in ADMIN_EMAILS:
+            self._send(403, {"error": "admin only"})
+            return None
         return uid
 
     def do_GET(self):
@@ -604,6 +637,12 @@ class Handler(BaseHTTPRequestHandler):
                             try:
                                 auth_mod.set_user_github_token(
                                     c, out["user"]["id"], access)
+                            except Exception:
+                                pass
+                            try:
+                                auth_mod.record_login(
+                                    c, out["user"]["id"], "github",
+                                    self._client_ip())
                             except Exception:
                                 pass
                         return self._redirect("/?github=login&code=" + _issue_oauth_code(out["token"]))
@@ -714,8 +753,21 @@ class Handler(BaseHTTPRequestHandler):
             with db._lock, db._conn() as c:
                 user = auth_mod.get_user(c, uid) if uid else None
             if user:
+                user["is_admin"] = ((user.get("email") or "").lower()
+                                    in ADMIN_EMAILS)
                 return self._send(200, {"user": user})
             return self._send(401, {"error": "not logged in"})
+        if path == "/api/admin/stats":
+            # Admin-only: site-wide logins, providers, online members.
+            if not self._require_admin():
+                return
+            try:
+                db = STATE.memory.db
+                with db._lock, db._conn() as c:
+                    stats = auth_mod.admin_stats(c)
+                return self._send(200, stats)
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
         if path == "/api/profile":
             uid = self._uid()
             if not uid:
@@ -1186,6 +1238,12 @@ class Handler(BaseHTTPRequestHandler):
                     else:
                         out = auth_mod.login(c, body.get("email", ""),
                                              body.get("password", ""))
+                    try:
+                        auth_mod.record_login(
+                            c, out["user"]["id"], "password",
+                            self._client_ip())
+                    except Exception:
+                        pass
                 return self._send(200, out)
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
@@ -1207,6 +1265,8 @@ class Handler(BaseHTTPRequestHandler):
                 user = None
             if not user:
                 return self._send(401, {"error": "login expired — try again"})
+            user["is_admin"] = ((user.get("email") or "").lower()
+                                in ADMIN_EMAILS)
             return self._send(200, {"token": token, "user": user})
         if path == "/api/auth/google":
             try:
@@ -1214,6 +1274,12 @@ class Handler(BaseHTTPRequestHandler):
                 with db._lock, db._conn() as c:
                     out = auth_mod.google_login(c, body.get("credential", ""),
                                                 GOOGLE_CLIENT_ID)
+                    try:
+                        auth_mod.record_login(
+                            c, out["user"]["id"], "google",
+                            self._client_ip())
+                    except Exception:
+                        pass
                 return self._send(200, out)
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
