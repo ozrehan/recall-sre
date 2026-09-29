@@ -229,6 +229,47 @@ async function openAdminPage() {
 function closeAdminPage() {
   $("adminPage").hidden = true;
 }
+let lastAdminStats = null;
+function exportAdminExcel() {
+  const d = lastAdminStats;
+  if (!d) { alert("Load the admin stats first."); return; }
+  const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const rows = [];
+  rows.push(["TraceMind admin export", new Date().toISOString()]);
+  rows.push([]);
+  rows.push(["Summary"]);
+  const t = d.totals || {};
+  rows.push(["Members", t.users ?? ""]);
+  rows.push(["Online now", t.online_now ?? ""]);
+  rows.push(["Logins (24h)", t.logins_24h ?? ""]);
+  rows.push(["Logins (7d)", t.logins_7d ?? ""]);
+  rows.push(["Total logins", t.logins_total ?? ""]);
+  rows.push([]);
+  rows.push(["Logins by provider"]);
+  rows.push(["Provider", "Logins"]);
+  Object.entries(d.by_provider || {}).forEach(([p, n]) => rows.push([p, n]));
+  rows.push([]);
+  rows.push(["Members"]);
+  rows.push(["Name", "Email", "Provider", "Logins", "Last seen", "Joined"]);
+  (d.users || []).forEach((u) => rows.push([
+    u.name || "", u.email || "", u.provider || "", u.logins ?? "",
+    u.last_seen || "", u.created_at || "",
+  ]));
+  rows.push([]);
+  rows.push(["Recent logins"]);
+  rows.push(["Email", "Provider", "IP", "Time"]);
+  (d.recent_logins || []).forEach((l) => rows.push([
+    l.email || "", l.provider || "", l.ip || "", l.created_at || "",
+  ]));
+  const csv = "﻿" + rows.map((r) => r.map(q).join(",")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "tracemind-admin-" + new Date().toISOString().slice(0, 10) + ".csv";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
 async function loadAdminStats() {
   const set = (id, html) => { const el = $(id); if (el) el.innerHTML = html; };
   set("adminCards", `<div class="admin-card"><div class="k">Loading</div><div class="v">…</div></div>`.repeat(4));
@@ -242,6 +283,7 @@ async function loadAdminStats() {
       set("adminBody", `<p class="admin-empty">Couldn't load admin stats (${esc(d.error)}).</p>`);
       return;
     }
+    lastAdminStats = d;
     const t = d.totals || {};
     set("adminCards", [
       ["Members", t.users ?? "—"],
@@ -1353,6 +1395,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("navAdmin").addEventListener("click", () => openAdminPage());
   $("adminBack").addEventListener("click", () => closeAdminPage());
   $("adminRefresh").addEventListener("click", () => loadAdminStats());
+  $("adminDots").addEventListener("click", (e) => {
+    e.stopPropagation();
+    $("adminMenu").hidden = !$("adminMenu").hidden;
+  });
+  document.addEventListener("click", (e) => {
+    const m = $("adminMenu");
+    if (!m.hidden && !e.target.closest(".admin-menu-wrap")) m.hidden = true;
+  });
+  $("adminDlPdf").addEventListener("click", () => {
+    $("adminMenu").hidden = true;
+    window.print();
+  });
+  $("adminDlXls").addEventListener("click", () => {
+    $("adminMenu").hidden = true;
+    exportAdminExcel();
+  });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !$("adminPage").hidden) closeAdminPage();
   });
