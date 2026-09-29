@@ -5,12 +5,17 @@ incident bank). This module is the *structured* database of record sitting
 underneath it: every incident — seeded or learned from a real resolution —
 is stored as a queryable row, and every investigation is logged.
 
+Storage: local SQLite by default; Turso (libSQL, SQLite-compatible) when
+TURSO_DATABASE_URL is set — Turso survives Render's ephemeral filesystem,
+so users, login history and learned incidents are never wiped on deploy.
+
 Tables:
   incidents      — one row per incident (full JSON blob + indexed columns)
   investigations — audit log of /api/investigate calls (query, matches)
+  users / login_events / user_github / follows — accounts (via auth.py)
 
-Pure stdlib (sqlite3). Thread-safe via a write lock; short-lived
-connections per operation so it works under ThreadingHTTPServer.
+Thread-safe via a write lock; short-lived connections per operation so it
+works under ThreadingHTTPServer.
 """
 from __future__ import annotations
 
@@ -82,6 +87,38 @@ def _j(v: Any) -> str:
     return json.dumps(v or [])
 
 
+def _open_conn(path: str):
+    """Open a database connection.
+
+    Durable mode: when TURSO_DATABASE_URL (+ optional TURSO_AUTH_TOKEN) is
+    set, connect to Turso (libSQL, SQLite-compatible) instead of the local
+    file. Render's free filesystem is ephemeral — it wipes the local SQLite
+    file on every deploy/restart, which used to erase users, login history
+    and learned incidents. Turso keeps them permanently.
+
+    Falls back to local sqlite3 when the env vars are absent, so local dev
+    and existing setups keep working with zero config.
+    """
+    url = os.environ.get("TURSO_DATABASE_URL", "").strip()
+    if url:
+        import libsql  # vendored wheel; only imported when Turso is configured
+        token = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
+        if url.startswith("https://"):
+            url = "libsql://" + url[len("https://"):]
+        if token:
+            return libsql.connect(url, auth_token=token)
+        return libsql.connect(url)
+    c = sqlite3.connect(path, check_same_thread=False, timeout=10)
+    c.row_factory = sqlite3.Row
+    return c
+
+
+def _db_label(path: str) -> str:
+    if os.environ.get("TURSO_DATABASE_URL", "").strip():
+        return "turso"
+    return f"sqlite:{path}"
+
+
 class IncidentDB:
     """SQLite store of record for incidents + investigation audit log."""
 
@@ -92,10 +129,8 @@ class IncidentDB:
         with self._conn() as c:
             c.executescript(SCHEMA)
 
-    def _conn(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self.path, check_same_thread=False, timeout=10)
-        c.row_factory = sqlite3.Row
-        return c
+    def _conn(self):
+        return _open_conn(self.path)
 
     # -- incidents -------------------------------------------------------
     def upsert_incident(self, incident: dict[str, Any], source: str = "seed") -> str:
@@ -158,7 +193,7 @@ class IncidentDB:
     def next_id(self) -> str:
         """Next INC-#### id after the highest existing one."""
         with self._conn() as c:
-            ids = [r[0] for r in c.execute("SELECT id FROM incidents")]
+            ids = [r[0] for r in c.execute("SELECT id FROM incidents").fetchall()]
         nums = [int(m.group(1)) for i in ids if (m := _ID_RE.search(i or ""))]
         return f"INC-{max(nums, default=0) + 1:04d}"
 
