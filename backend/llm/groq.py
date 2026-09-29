@@ -94,7 +94,9 @@ def groq_chat(api_key: str, system: str, user: str,
         try:
             return _groq_chat_once(api_key, system, user, cand, max_tokens)
         except RuntimeError as e:
-            if "404" not in str(e) and "does not exist" not in str(e):
+            msg = str(e)
+            # retired model (404) or rate-limited (429): try the next model
+            if "404" not in msg and "does not exist" not in msg and "429" not in msg:
                 raise
             last_err = e
     raise last_err or RuntimeError("no Groq model available")
