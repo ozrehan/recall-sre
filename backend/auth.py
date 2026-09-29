@@ -103,6 +103,26 @@ def ensure_schema(conn) -> None:
                      "ON follows(follower_id)")
     except Exception:
         pass
+    # admin dashboard: login tracking + presence ("who's online")
+    for _col in ("provider TEXT DEFAULT ''", "last_seen TEXT"):
+        try:
+            conn.execute(f"ALTER TABLE users ADD COLUMN {_col}")
+        except Exception:
+            pass
+    try:
+        conn.execute("""CREATE TABLE IF NOT EXISTS login_events (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER,
+            email      TEXT NOT NULL DEFAULT '',
+            provider   TEXT NOT NULL DEFAULT '',
+            ip         TEXT NOT NULL DEFAULT '',
+            created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')))""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_login_events_created "
+                     "ON login_events(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_login_events_user "
+                     "ON login_events(user_id)")
+    except Exception:
+        pass
 
 
 def _hash_password(password: str) -> str:
@@ -157,6 +177,95 @@ def verify_token(token: str):
 def _public(row) -> dict:
     return {"id": row[0], "name": row[1], "email": row[2],
             "created_at": row[3]}
+
+
+# ---------- admin dashboard: login tracking + presence ----------
+
+_PROVIDER_FALLBACK = (
+    "COALESCE(NULLIF(u.provider,''), "
+    "CASE WHEN u.pw_hash='google-oauth' THEN 'google' "
+    "WHEN u.pw_hash='github-oauth' THEN 'github' "
+    "ELSE 'password' END)")
+
+
+def record_login(conn, user_id: int, provider: str, ip: str = "") -> None:
+    """Log one login event and refresh the user's provider/last_seen."""
+    try:
+        ensure_schema(conn)
+        row = conn.execute("SELECT email FROM users WHERE id=?",
+                           (user_id,)).fetchone()
+        email = row[0] if row else ""
+        conn.execute(
+            "INSERT INTO login_events (user_id, email, provider, ip) "
+            "VALUES (?,?,?,?)", (user_id, email, provider or "", ip or ""))
+        conn.execute(
+            "UPDATE users SET provider=?, "
+            "last_seen=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?",
+            (provider or "", user_id))
+    except Exception:
+        pass
+
+
+def touch_seen(conn, user_id: int) -> None:
+    """Refresh last_seen, at most once a minute per user (cheap presence)."""
+    try:
+        conn.execute(
+            """UPDATE users SET last_seen=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+               WHERE id=? AND (last_seen IS NULL
+                 OR last_seen < datetime('now','-60 seconds'))""",
+            (user_id,))
+    except Exception:
+        pass
+
+
+def admin_stats(conn) -> dict:
+    """Aggregate numbers for the admin dashboard."""
+    ensure_schema(conn)
+
+    def one(q, args=()):
+        r = conn.execute(q, args).fetchone()
+        return r[0] if r and r[0] is not None else 0
+
+    total_users = one("SELECT COUNT(*) FROM users")
+    logins_24h = one("SELECT COUNT(*) FROM login_events "
+                     "WHERE created_at >= datetime('now','-1 day')")
+    logins_7d = one("SELECT COUNT(*) FROM login_events "
+                    "WHERE created_at >= datetime('now','-7 days')")
+    online_now = one("SELECT COUNT(*) FROM users "
+                     "WHERE last_seen >= datetime('now','-5 minutes')")
+    by_provider = {r[0] or "unknown": r[1] for r in
+                   conn.execute("SELECT provider, COUNT(*) FROM login_events "
+                                "GROUP BY provider ORDER BY COUNT(*) DESC")}
+    recent = [
+        {"email": r[0] or "", "provider": r[1] or "",
+         "ip": r[2] or "", "created_at": r[3] or ""}
+        for r in conn.execute(
+            "SELECT email, provider, ip, created_at FROM login_events "
+            "ORDER BY id DESC LIMIT 30")]
+    online = [
+        {"id": r[0], "name": r[1] or "", "email": r[2] or "",
+         "provider": r[3] or "", "last_seen": r[4] or ""}
+        for r in conn.execute(
+            f"SELECT u.id, u.name, u.email, {_PROVIDER_FALLBACK}, u.last_seen "
+            "FROM users u WHERE u.last_seen >= datetime('now','-5 minutes') "
+            "ORDER BY u.last_seen DESC")]
+    users = [
+        {"id": r[0], "name": r[1] or "", "email": r[2] or "",
+         "provider": r[3] or "", "created_at": r[4] or "",
+         "last_seen": r[5] or "", "logins": r[6] or 0}
+        for r in conn.execute(
+            f"SELECT u.id, u.name, u.email, {_PROVIDER_FALLBACK}, "
+            "u.created_at, u.last_seen, "
+            "(SELECT COUNT(*) FROM login_events e WHERE e.user_id=u.id) "
+            "FROM users u ORDER BY u.created_at DESC")]
+    return {
+        "totals": {"users": total_users, "logins_24h": logins_24h,
+                   "logins_7d": logins_7d, "online_now": online_now},
+        "by_provider": by_provider,
+        "recent_logins": recent,
+        "online": online,
+        "users": users,
+    }
 
 
 def _validate_email(email: str) -> str:
