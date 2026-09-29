@@ -169,6 +169,39 @@
 
 </div>
 
+<!-- ============ ADMIN PAGE ============ -->
+<div class="admin-page" id="adminPage" hidden>
+  <div class="admin-top">
+    <button class="admin-back" id="adminBack" title="Back to Trace">← Back</button>
+    <div class="admin-title">
+      <span class="admin-shield"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.5 4.5 5.5v6c0 4.6 3.2 8.4 7.5 10 4.3-1.6 7.5-5.4 7.5-10v-6z"/><path d="M9.2 12.2l2 2 3.8-4"/></svg></span>
+      <div><b>Admin</b><span>Site activity &amp; members</span></div>
+    </div>
+    <button class="admin-refresh" id="adminRefresh" title="Refresh stats">Refresh</button>
+  </div>
+  <div class="admin-body" id="adminBody">
+    <div class="admin-cards" id="adminCards"></div>
+    <div class="admin-grid">
+      <section class="admin-sec">
+        <h3>Live now <span class="admin-count" id="liveCount"></span></h3>
+        <div id="adminLive"></div>
+      </section>
+      <section class="admin-sec">
+        <h3>Logins by provider</h3>
+        <div id="adminProviders"></div>
+      </section>
+    </div>
+    <section class="admin-sec">
+      <h3>Members <span class="admin-count" id="memberCount"></span></h3>
+      <div class="admin-table" id="adminMembers"></div>
+    </section>
+    <section class="admin-sec">
+      <h3>Recent logins</h3>
+      <div class="admin-table" id="adminRecent"></div>
+    </section>
+  </div>
+</div>
+
 <!-- ============ SETTINGS ============ -->
 <div class="set-scrim" id="setScrim"></div>
 <div class="setmodal" id="setModal" role="dialog" aria-label="Settings">
