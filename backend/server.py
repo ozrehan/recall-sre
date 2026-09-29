@@ -525,6 +525,21 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Location", url)
         self.end_headers()
 
+    # Canonical domain: only tracemind.run.place serves the site. The old
+    # onrender.com host (and only it) 308-redirects here, preserving path,
+    # method and body. localhost keeps working for local dev.
+    CANONICAL_HOST = "tracemind.run.place"
+    LEGACY_HOSTS = {"tracemind-szuq.onrender.com"}
+
+    def _force_canonical(self):
+        host = (self.headers.get("Host") or "").split(":")[0].lower()
+        if host in self.LEGACY_HOSTS:
+            self.send_response(308)
+            self.send_header("Location", "https://" + self.CANONICAL_HOST + self.path)
+            self.end_headers()
+            return True
+        return False
+
     def _read_json(self):
         length = int(self.headers.get("Content-Length", 0))
         if not length:
@@ -579,13 +594,15 @@ class Handler(BaseHTTPRequestHandler):
         return uid
 
     def do_GET(self):
+        if self._force_canonical():
+            return
         path = urllib.parse.urlparse(self.path).path
         if path == "/api/github/oauth/start":
             if not (GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET):
                 return self._send(500, {"error": "GitHub OAuth not configured"})
-            # Canonical callback: GitHub OAuth Apps allow only ONE registered
-            # callback URL, so every host uses the primary domain. A login that
-            # starts on another host (e.g. the onrender URL) finishes here.
+            # Canonical callback: every host uses the primary domain's callback
+            # (registered on the GitHub OAuth App), so a login that starts on
+            # another host finishes here.
             cb = "https://tracemind.run.place/api/github/oauth/callback"
             qs0 = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             login_mode = (qs0.get("mode") or [""])[0] == "login"
@@ -852,6 +869,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        if self._force_canonical():
+            return
         path = urllib.parse.urlparse(self.path).path
         body = self._read_json()
         if path == "/api/github/oauth/nonce":
