@@ -983,6 +983,74 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"access_mode": s["access_mode"]})
             except Exception as e:
                 return self._send(500, {"error": str(e)})
+        if path == "/api/repo/file":
+            # Read a file from one of the user's connected repos.
+            uid = self._require_uid()
+            if not uid:
+                return
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            repo = (qs.get("repo") or [""])[0].strip()
+            fpath = (qs.get("path") or [""])[0].strip().lstrip("/")
+            try:
+                token = self.gh_token_for(uid)
+                if not token:
+                    return self._send(400, {"error": "GitHub not connected"})
+                if not repo or not fpath or ".." in fpath.split("/"):
+                    return self._send(400, {"error": "repo and a valid path required"})
+                meta = _gh_api.get_repo(repo, token)
+                ref = (qs.get("ref") or [""])[0].strip() or meta.get("default_branch") or "main"
+                f = _gh_api.get_file(repo, fpath, ref, token)
+                if not f:
+                    return self._send(404, {"error": "file not found"})
+                return self._send(200, {"repo": repo, "ref": ref, "path": f["path"],
+                                       "sha": f["sha"], "content": f["content"]})
+            except Exception as e:
+                return self._send(500, {"error": str(e)[:200]})
+        if path == "/api/repo/commit":
+            # Commit file changes to the user's repo. ALWAYS creates a new
+            # branch and opens a pull request — never pushes to main directly.
+            uid = self._require_uid()
+            if not uid:
+                return
+            try:
+                token = self.gh_token_for(uid)
+                if not token:
+                    return self._send(400, {"error": "GitHub not connected"})
+                repo = (body.get("repo") or "").strip()
+                files = body.get("files") or []
+                message = (body.get("message") or "").strip() or "Update via TraceMind"
+                if not repo or not files:
+                    return self._send(400, {"error": "repo and files required"})
+                if len(files) > 10:
+                    return self._send(400, {"error": "max 10 files per commit"})
+                clean = []
+                for f in files:
+                    fp = (f.get("path") or "").strip().lstrip("/")
+                    if not fp or ".." in fp.split("/"):
+                        return self._send(400, {"error": f"bad path: {f.get('path')}"})
+                    clean.append({"path": fp, "content": f.get("content") or ""})
+                meta = _gh_api.get_repo(repo, token)
+                base = meta.get("default_branch") or "main"
+                head_commit = _gh_api.latest_commit(repo, base, token)
+                branch = "tracemind-edit-" + time.strftime("%Y%m%d-%H%M%S")
+                _gh_api.create_branch(repo, branch, head_commit["sha"], token)
+                committed = []
+                for f in clean:
+                    existing = _gh_api.get_file(repo, f["path"], branch, token)
+                    r = _gh_api.update_file(repo, f["path"], f["content"], message,
+                                            branch, existing["sha"] if existing else None,
+                                            token)
+                    committed.append({"path": f["path"],
+                                      "url": (r.get("content") or {}).get("html_url")})
+                pr = _gh_api.open_pr(repo, message,
+                                     "Committed from TraceMind. Review and merge when ready.",
+                                     branch, base, token)
+                return self._send(200, {"repo": repo, "branch": branch, "base": base,
+                                       "files": committed,
+                                       "pr_url": pr.get("html_url"),
+                                       "pr_number": pr.get("number")})
+            except Exception as e:
+                return self._send(500, {"error": str(e)[:200]})
         if path == "/api/plugins/interval":
             try:
                 return self._send(200, STATE.set_sentinel_minutes(
