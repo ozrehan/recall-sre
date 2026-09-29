@@ -45,14 +45,6 @@ what actually worked before.
   LeetCode, X, Instagram, website), animated doodle avatar, followers/following
 - Recents & pinned chats reopen saved transcripts
 
-**Admin (owner only)**
-- Full-screen dashboard: member count, live-online members, logins (24h / 7d /
-  total), logins by provider, all members, recent login history (email,
-  provider, IP, time)
-- ⋮ menu exports the data to PDF or Excel
-- Access is gated by the `ADMIN_EMAILS` env var — the button and the API are
-  invisible to everyone else
-
 ## How it works (real pipeline, no demo data)
 
 ```
@@ -109,7 +101,6 @@ memory counter grow.
 | `HINDSIGHT_BANK_ID` | memory bank for real incidents |
 | `GROQ_API_KEY` | optional LLM-synthesized briefings (free tier at groq.com) |
 | `AUTH_SECRET` | signs login tokens |
-| `ADMIN_EMAILS` | comma-separated owner emails for the admin dashboard |
 | `DB_PATH` | SQLite database of record (default `backend/data/tracemind.db`) |
 
 Settings changed in the UI (repo, sync interval) persist in SQLite.
@@ -126,8 +117,7 @@ Settings changed in the UI (repo, sync interval) persist in SQLite.
 | POST | `/api/chat/plan-edit` | natural-language request → file pick + unified diff |
 | GET/POST | `/api/repo/file`, `/api/repo/commit` | read a repo file / commit & open a PR |
 | POST | `/api/auth/signup`, `/api/auth/login`, `/api/auth/google` | account auth |
-| GET | `/api/auth/me` | current user (`is_admin` flag included) |
-| GET | `/api/admin/stats` | admin-only login/member analytics |
+| GET | `/api/auth/me` | current user |
 | GET | `/api/github/oauth/start` | begin GitHub OAuth (connect or login) |
 
 ## Project structure
@@ -136,7 +126,7 @@ Settings changed in the UI (repo, sync interval) persist in SQLite.
 recall-sre/
 ├── backend/
 │   ├── server.py              # stdlib HTTP server + JSON API (no deps)
-│   ├── auth.py                # accounts, tokens, login events, admin stats
+│   ├── auth.py                # accounts, tokens, login events
 │   ├── agent/core.py          # analyze → recall → recommend → learn loop
 │   ├── integrations/
 │   │   ├── github_issues.py   # GitHub API client + issue→incident mapping
@@ -149,7 +139,7 @@ recall-sre/
 │   │   └── hindsight_store.py # real Hindsight adapter (retain/recall/reflect)
 │   ├── vendor/wheels/         # vendored wheels — builds need no PyPI
 │   └── data/incidents.json    # seed incidents (28)
-├── frontend/                  # chat UI, admin page, profiles, GitHub panel
+├── frontend/                  # chat UI, profiles, GitHub panel
 └── render.yaml                # Render blueprint
 ```
 
