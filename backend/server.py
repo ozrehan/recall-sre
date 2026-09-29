@@ -700,7 +700,7 @@ class Handler(BaseHTTPRequestHandler):
             m = STATE.memory
             return self._send(200, {
                 "ok": True, "backend": STATE.backend_name,
-                "database": "sqlite",
+                "database": _db_label(DB_PATH),
                 "memory_size": m.count(),
                 "db_size": m.db.count(),
                 "github": {
@@ -787,6 +787,70 @@ class Handler(BaseHTTPRequestHandler):
                 with db._lock, db._conn() as c:
                     stats = auth_mod.admin_stats(c)
                 return self._send(200, stats)
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+        if path == "/api/admin/restore" and self.command == "POST":
+            # Admin-only, one-time: re-import a login snapshot (users + login
+            # history) after moving to a fresh/persistent database. A meta
+            # flag makes it refuse to run twice so history can't be duplicated.
+            # Password accounts can't be restored (hashes never leave the DB),
+            # so only google/github users are re-created; they log back in
+            # with their provider as usual.
+            if not self._require_admin():
+                return
+            try:
+                body = self._read_json() or {}
+                db = STATE.memory.db
+                with db._lock, db._conn() as c:
+                    if db.meta_get("admin_restore_done"):
+                        return self._send(409, {"error": "restore already done"})
+                    auth_mod.ensure_schema(c)
+                    email_to_uid = {}
+                    restored_users = restored_events = skipped = 0
+                    for u in body.get("users", []) or []:
+                        email = (u.get("email") or "").strip().lower()
+                        if not email:
+                            continue
+                        row = c.execute(
+                            "SELECT id FROM users WHERE email=?", (email,)).fetchone()
+                        if row:
+                            email_to_uid[email] = row[0]
+                            continue
+                        provider = (u.get("provider") or "").strip() or "google"
+                        if provider == "password":
+                            skipped += 1
+                            continue
+                        sentinel = ("google-oauth" if provider == "google"
+                                    else "github-oauth")
+                        cur = c.execute(
+                            "INSERT INTO users(name,email,pw_hash,provider,created_at,last_seen)"
+                            " VALUES(?,?,?,?," 
+                            "COALESCE(?,strftime('%Y-%m-%dT%H:%M:%SZ','now')),"
+                            "COALESCE(?,strftime('%Y-%m-%dT%H:%M:%SZ','now')))",
+                            (u.get("name") or email.split("@")[0], email, sentinel,
+                             provider, u.get("created_at"), u.get("last_seen")))
+                        email_to_uid[email] = cur.lastrowid
+                        restored_users += 1
+                    for e in body.get("login_events", []) or []:
+                        email = (e.get("email") or "").strip().lower()
+                        uid = email_to_uid.get(email)
+                        if not uid:
+                            continue
+                        dup = c.execute(
+                            "SELECT id FROM login_events WHERE email=? AND created_at=?",
+                            (email, e.get("created_at"))).fetchone()
+                        if dup:
+                            continue
+                        c.execute(
+                            "INSERT INTO login_events(user_id,email,provider,ip,created_at)"
+                            " VALUES(?,?,?,?,COALESCE(?,strftime('%Y-%m-%dT%H:%M:%SZ','now')))",
+                            (uid, email, e.get("provider") or "", e.get("ip") or "",
+                             e.get("created_at")))
+                        restored_events += 1
+                    db.meta_set("admin_restore_done", "1")
+                return self._send(200, {"restored_users": restored_users,
+                                        "restored_events": restored_events,
+                                        "skipped_password_users": skipped})
             except Exception as e:
                 return self._send(500, {"error": str(e)})
         if path == "/api/profile":
