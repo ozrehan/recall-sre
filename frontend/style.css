@@ -775,3 +775,32 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
 .admin-empty { color: var(--faint); font-size: 13px; padding: 8px 0; }
 .admin-bar { height: 8px; background: #f0f0f0; border-radius: 6px; overflow: hidden; margin-top: 6px; }
 .admin-bar i { display: block; height: 100%; background: var(--ink); border-radius: 6px; }
+
+/* ---------- admin export menu ---------- */
+.admin-menu-wrap { position: relative; }
+.admin-dots {
+  border: 1px solid var(--border); background: #fff; border-radius: 8px;
+  width: 36px; height: 34px; font-size: 18px; font-weight: 700; cursor: pointer;
+  color: var(--text); line-height: 1;
+}
+.admin-dots:hover { background: #f6f6f6; }
+.admin-menu {
+  position: absolute; right: 0; top: 40px; z-index: 210;
+  background: #fff; border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.12); min-width: 170px; padding: 6px;
+}
+.admin-menu[hidden] { display: none; }
+.admin-menu button {
+  display: block; width: 100%; text-align: left; border: 0; background: none;
+  padding: 10px 12px; font-size: 13.5px; border-radius: 7px; cursor: pointer;
+  color: var(--text);
+}
+.admin-menu button:hover { background: #f2f2f2; }
+
+/* ---------- admin print (PDF) ---------- */
+@media print {
+  .admin-top, .admin-dots, .admin-menu { display: none !important; }
+  .admin-page { position: static; }
+  .admin-body { max-width: none; padding: 0; overflow: visible; }
+  .admin-sec { break-inside: avoid; }
+}
