@@ -1050,7 +1050,7 @@ function smallTalkReply(text) {
     return `<p>Running smooth — memory's warm and ready. What incident are we digging into today?</p>`;
   }
   if (/^(who are you|what are you|what can you do|\bhelp\b|what is this|about you)\b/.test(t) || /^can (you|u) do (anything|something|this|that|it)$/.test(t)) {
-    return `<p>I'm <b>Trace</b>, your incident-memory agent:</p><p>• <b>Investigate</b> — paste an alert or error and I'll break it down<br>• <b>Recall</b> — I search past incidents for similar ones<br>• <b>Recommend</b> — I suggest fixes based on what worked before<br>• <b>Learn</b> — resolve an incident and it becomes memory for next time</p><p>Try me — describe something that's broken.</p>`;
+    return `<p>I'm <b>Trace</b>, your incident-memory agent:</p><p>• <b>Investigate</b> — paste an alert or error and I'll break it down<br>• <b>Recall</b> — I search past incidents for similar ones<br>• <b>Recommend</b> — I suggest fixes based on what worked before<br>• <b>Learn</b> — resolve an incident and it becomes memory for next time<br>• <b>Edit code</b> — tell me what to change in your repo and I'll do it, then open a pull request</p><p>Try me — describe something that's broken, or something to change.</p>`;
   }
   if (/^(thanks?|thank you|thx|nandri)\b/.test(t)) {
     return `<p>Anytime! If the fix worked, resolve the incident so I remember it for next time.</p>`;
@@ -1075,6 +1075,90 @@ function looksLikeIncident(text) {
   // "X is not working / broken / failing"
   if (/\b(not working|isn'?t working|doesn'?t work|broken|fail(?:ed|ing|s)?\s+to)\b/.test(t)) return true;
   return false;
+}
+/* ---------- autonomous code edit: user commands, Trace does the work ---------- */
+function looksLikeCodeEdit(text) {
+  const t = text.toLowerCase();
+  // "update/change ... in/on my github/repo"
+  if (/\b(in|on|for|of)\s+(my\s+)?(github|repo|repository)\b/.test(t) &&
+      /\b(updat|chang|edit|modif|fix|add|remove|delet|creat|push|commit)\w*\b/.test(t))
+    return true;
+  // "change/update the button color", "edit index.html", "fix the typo in readme"
+  if (/\b(updat|chang|edit|modif|fix)\w*\b/.test(t) &&
+      /\b(code|file|readme|button|text|color|page|title|logo|script|style|css|html|footer|header)\b/.test(t))
+    return true;
+  if (/\b(add|create)\b.{0,20}\bfile\b/.test(t)) return true;
+  return false;
+}
+async function planCodeEdit(text) {
+  if (!currentChatTs) currentChatTs = Date.now();
+  addUserMsg(text);
+  const body = addAgentMsg();
+  const typing = addTyping(body);
+  busy = true; refreshSendBtn();
+  try {
+    const r = await tmApi.post("/api/chat/plan-edit", { message: text });
+    typing.remove();
+    if (r.error === "connect_github") {
+      say(body, `<p>Connect your GitHub first (GitHub panel \u2192 Connect with GitHub), then just tell me what to change.</p>`);
+    } else if (r.error === "no_repos") {
+      say(body, `<p>Add a repo in the GitHub panel first, then just tell me what to change.</p>`);
+    } else if (r.error) {
+      say(body, `<p>Couldn't plan that change (${esc(r.error)}). Try describing it a bit differently?</p>`);
+    } else if (r.clarify) {
+      say(body, `<p>${esc(r.clarify)}</p>`);
+    } else {
+      const id = "pe" + Date.now();
+      const diffHtml = esc(r.diff || "(new file)").split("\n").map((l) => {
+        const cls = (l.startsWith("+") && !l.startsWith("+++")) ? "dp-add"
+          : (l.startsWith("-") && !l.startsWith("---")) ? "dp-del"
+          : l.startsWith("@@") ? "dp-hunk" : "";
+        return `<div class="dp-line ${cls}">${l || " "}</div>`;
+      }).join("");
+      say(body, `<p>Here's the change I'll make in <b>${esc(r.repo)}</b> <span class="plug-sub">${esc(r.path)}${r.new_file ? " (new file)" : ""}</span>:</p>
+        <div class="diff-card"><pre>${diffHtml}</pre></div>
+        <div class="gh-row" style="margin-top:8px">
+          <button class="btn-dark" id="${id}Apply">Apply &amp; open PR</button>
+          <button class="btn-ghost" id="${id}Cancel">Cancel</button>
+        </div>
+        <p class="plug-sub" id="${id}Status"></p>`);
+      const applyBtn = document.getElementById(id + "Apply");
+      const cancelBtn = document.getElementById(id + "Cancel");
+      const done = () => { applyBtn.style.display = "none"; cancelBtn.style.display = "none"; };
+      cancelBtn.addEventListener("click", () => {
+        document.getElementById(id + "Status").textContent = "Cancelled \u2014 no changes made.";
+        done(); saveTranscript();
+      });
+      applyBtn.addEventListener("click", async () => {
+        const st = document.getElementById(id + "Status");
+        applyBtn.disabled = true; applyBtn.textContent = "Committing\u2026";
+        try {
+          const c = await tmApi.post("/api/repo/commit", {
+            repo: r.repo, files: [{ path: r.path, content: r.new_content }],
+            message: r.suggested_message || ("Update " + r.path + " via TraceMind"),
+          });
+          if (c.error) {
+            st.textContent = "Error: " + c.error;
+            applyBtn.disabled = false; applyBtn.textContent = "Apply & open PR";
+          } else {
+            st.innerHTML = `Done \u2014 committed to <b>${esc(c.branch)}</b>. ` +
+              (c.pr_url ? `<a href="${esc(c.pr_url)}" target="_blank" rel="noopener">Review PR #${c.pr_number} \u2197</a> and merge it to update ${esc(c.base)}.`
+                        : "No PR link returned.");
+            done();
+          }
+        } catch (e) {
+          st.textContent = "Commit failed \u2014 check your connection and try again.";
+          applyBtn.disabled = false; applyBtn.textContent = "Apply & open PR";
+        }
+        saveTranscript();
+      });
+    }
+  } catch (e) {
+    typing.remove();
+    say(body, `<p>Couldn't reach me just now \u2014 check your connection and try again.</p>`);
+  }
+  busy = false; refreshSendBtn();
+  saveTranscript();
 }
 async function chatWithTrace(text) {
   if (!currentChatTs) currentChatTs = Date.now();
@@ -1109,7 +1193,10 @@ function send() {
     saveTranscript();
     return;
   }
-  if (!looksLikeIncident(text)) { chatWithTrace(text); return; }
+  if (!looksLikeIncident(text)) {
+    if (looksLikeCodeEdit(text)) { planCodeEdit(text); return; }
+    chatWithTrace(text); return;
+  }
   investigate(alertFromText(text), text);
 }
 let recog = null, listening = false;
