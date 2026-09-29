@@ -221,45 +221,73 @@ function ago(iso) {
   if (s < 86400) return Math.floor(s / 3600) + "h ago";
   return Math.floor(s / 86400) + "d ago";
 }
-async function openAdminModal() {
-  openInfo("Admin");
+async function openAdminPage() {
+  const p = $("adminPage");
+  p.hidden = false;
+  loadAdminStats();
+}
+function closeAdminPage() {
+  $("adminPage").hidden = true;
+}
+async function loadAdminStats() {
+  const set = (id, html) => { const el = $(id); if (el) el.innerHTML = html; };
+  set("adminCards", `<div class="admin-card"><div class="k">Loading</div><div class="v">…</div></div>`.repeat(4));
+  set("adminLive", `<p class="admin-empty">Loading…</p>`);
+  set("adminProviders", `<p class="admin-empty">Loading…</p>`);
+  set("adminMembers", `<p class="admin-empty">Loading…</p>`);
+  set("adminRecent", `<p class="admin-empty">Loading…</p>`);
   try {
     const d = await api("/api/admin/stats");
+    if (d.error) {
+      set("adminBody", `<p class="admin-empty">Couldn't load admin stats (${esc(d.error)}).</p>`);
+      return;
+    }
     const t = d.totals || {};
-    const prov = d.by_provider || {};
-    const provRows = Object.keys(prov).map((p) =>
-      `<div class="memrow"><span>${esc(p)}</span><b>${prov[p]}</b></div>`).join("");
+    set("adminCards", [
+      ["Members", t.users ?? "—"],
+      ["Online now", t.online_now ?? "—"],
+      ["Logins · 24h", t.logins_24h ?? "—"],
+      ["Logins · 7d", t.logins_7d ?? "—"],
+    ].map(([k, v]) => `<div class="admin-card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join(""));
     const online = d.online || [];
-    const recent = d.recent_logins || [];
+    $("liveCount").textContent = online.length;
+    set("adminLive", online.length ? online.map((u) => `
+      <div class="admin-row"><span class="live-dot"></span>
+        <div class="who"><b>${esc(u.name || u.email)}</b><span>${esc(u.email)}</span></div>
+        <span class="admin-pill">${esc(u.provider)}</span>
+        <span class="admin-meta">${ago(u.last_seen)}</span>
+      </div>`).join("") : `<p class="admin-empty">Nobody online right now.</p>`);
+    const prov = d.by_provider || {};
+    const pkeys = Object.keys(prov);
+    const pmax = Math.max(1, ...pkeys.map((k) => prov[k]));
+    set("adminProviders", pkeys.length ? pkeys.map((p) => `
+      <div style="margin-bottom:12px">
+        <div class="admin-row" style="border:0;padding:0">
+          <div class="who"><b style="text-transform:capitalize">${esc(p)}</b></div>
+          <span class="admin-meta mono">${prov[p]} logins</span>
+        </div>
+        <div class="admin-bar"><i style="width:${Math.round((prov[p] / pmax) * 100)}%"></i></div>
+      </div>`).join("") : `<p class="admin-empty">No logins recorded yet.</p>`);
     const users = d.users || [];
-    $("infoBody").innerHTML = `
-      <div class="membox">
-        <div class="memrow"><span>members</span><b>${t.users ?? "—"}</b></div>
-        <div class="memrow"><span>online now</span><b>${t.online_now ?? "—"}</b></div>
-        <div class="memrow"><span>logins · 24h</span><b>${t.logins_24h ?? "—"}</b></div>
-        <div class="memrow"><span>logins · 7d</span><b>${t.logins_7d ?? "—"}</b></div>
-      </div>
-      <p class="info-hint">Logins by provider (all time)</p>
-      <div class="membox">${provRows || `<p class="info-hint">No logins recorded yet.</p>`}</div>
-      <p class="info-hint">Live now (${online.length})</p>
-      ${online.length ? online.map((u) => `
-        <div class="info-row" style="cursor:default">
-          <span class="info-row-t">${esc(u.name || u.email)}</span>
-          <span class="info-row-s">${esc(u.email)} · ${esc(u.provider)} · ${ago(u.last_seen)}</span>
-        </div>`).join("") : `<p class="info-hint">Nobody online right now.</p>`}
-      <p class="info-hint">All members (${users.length})</p>
-      ${users.map((u) => `
-        <div class="info-row" style="cursor:default">
-          <span class="info-row-t">${esc(u.name || u.email)}</span>
-          <span class="info-row-s">${esc(u.email)} · ${esc(u.provider)} · ${u.logins} logins · seen ${ago(u.last_seen)}</span>
-        </div>`).join("")}
-      <p class="info-hint">Recent logins</p>
-      ${recent.length ? recent.map((l) => `
-        <div class="info-row" style="cursor:default">
-          <span class="info-row-t">${esc(l.email)}</span>
-          <span class="info-row-s">${esc(l.provider)} · ${esc(l.ip)} · ${ago(l.created_at)}</span>
-        </div>`).join("") : `<p class="info-hint">No login events yet.</p>`}`;
-  } catch (e) { $("infoBody").innerHTML = `<p class="info-hint">Couldn't load admin stats.</p>`; }
+    $("memberCount").textContent = users.length;
+    set("adminMembers", users.length ? users.map((u) => `
+      <div class="admin-row">
+        <div class="who"><b>${esc(u.name || u.email)}</b><span>${esc(u.email)}</span></div>
+        <span class="admin-pill">${esc(u.provider)}</span>
+        <span class="admin-meta">${u.logins} login${u.logins === 1 ? "" : "s"}</span>
+        <span class="admin-meta">seen ${ago(u.last_seen)}</span>
+      </div>`).join("") : `<p class="admin-empty">No members yet.</p>`);
+    const recent = d.recent_logins || [];
+    set("adminRecent", recent.length ? recent.map((l) => `
+      <div class="admin-row">
+        <div class="who"><b>${esc(l.email)}</b></div>
+        <span class="admin-pill">${esc(l.provider)}</span>
+        <span class="admin-meta mono">${esc(l.ip)}</span>
+        <span class="admin-meta">${ago(l.created_at)}</span>
+      </div>`).join("") : `<p class="admin-empty">No login events yet.</p>`);
+  } catch (e) {
+    set("adminBody", `<p class="admin-empty">Couldn't load admin stats.</p>`);
+  }
 }
 
 /* "Login with GitHub": after GitHub redirects back with ?github=login&token=,
@@ -1322,7 +1350,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("navDb").addEventListener("click", () => openDbModal());
   $("navScheduled").addEventListener("click", () => openScheduledModal());
   $("navSettings").addEventListener("click", () => setModal(true));
-  $("navAdmin").addEventListener("click", () => openAdminModal());
+  $("navAdmin").addEventListener("click", () => openAdminPage());
+  $("adminBack").addEventListener("click", () => closeAdminPage());
+  $("adminRefresh").addEventListener("click", () => loadAdminStats());
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("adminPage").hidden) closeAdminPage();
+  });
   updateAdminNav();
   $("infoClose").addEventListener("click", closeInfo);
   $("infoScrim").addEventListener("click", closeInfo);
