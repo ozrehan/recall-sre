@@ -133,6 +133,35 @@ def get_file(repo: str, path: str, ref: str,
 
 # ---- write operations (token required) ------------------------------------
 
+TEXT_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".html", ".css", ".scss",
+            ".json", ".yml", ".yaml", ".toml", ".md", ".txt", ".sh", ".sql",
+            ".xml", ".svg", ".env", ".gitignore", ".dockerignore", "dockerfile"}
+SKIP_DIRS = ("node_modules/", ".git/", "dist/", "build/", "__pycache__/",
+             ".next/", "vendor/wheels/", ".venv/", "venv/")
+
+
+def repo_tree(repo: str, branch: str, token: str | None,
+              limit: int = 400) -> list:
+    """Editable text-file paths in the repo (filtered tree). Raises on error."""
+    data = _get(f"{API}/repos/{repo}/git/trees/{branch}?recursive=1", token)
+    out = []
+    for t in data.get("tree", []):
+        if t.get("type") != "blob":
+            continue
+        p = t.get("path", "")
+        if any(p.startswith(d) for d in SKIP_DIRS):
+            continue
+        low = p.lower()
+        if low.endswith((".png", ".jpg", ".jpeg", ".gif", ".mp4", ".mov",
+                         ".zip", ".tar", ".gz", ".whl", ".pdf", ".ico",
+                         ".woff", ".woff2", ".ttf", ".eot")):
+            continue
+        out.append(p)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def create_branch(repo: str, branch: str, sha: str, token: str) -> dict:
     return _post(f"{API}/repos/{repo}/git/refs", token,
                  {"ref": f"refs/heads/{branch}", "sha": sha})
