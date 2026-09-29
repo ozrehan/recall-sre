@@ -9,9 +9,10 @@ Endpoints live in server.py:
   GET  /api/auth/me     (Authorization: Bearer <token>) -> {user}
   POST /api/auth/logout -> {ok: true}  (client discards the token)
 
-NOTE: Render free disks are ephemeral — accounts persist until the next
-deploy/redeploy, same as the incident DB. Hindsight remains the durable
-memory layer.
+NOTE: On Render's free tier the local disk is ephemeral, so without Turso
+configured, accounts persist only until the next deploy/redeploy. Set
+TURSO_DATABASE_URL (+ TURSO_AUTH_TOKEN) to make users and login history
+permanent. Hindsight remains the durable semantic memory layer.
 """
 from __future__ import annotations
 
@@ -235,20 +236,20 @@ def admin_stats(conn) -> dict:
                      "WHERE last_seen >= datetime('now','-5 minutes')")
     by_provider = {r[0] or "unknown": r[1] for r in
                    conn.execute("SELECT provider, COUNT(*) FROM login_events "
-                                "GROUP BY provider ORDER BY COUNT(*) DESC")}
+                                "GROUP BY provider ORDER BY COUNT(*) DESC").fetchall()}
     recent = [
         {"email": r[0] or "", "provider": r[1] or "",
          "ip": r[2] or "", "created_at": r[3] or ""}
         for r in conn.execute(
             "SELECT email, provider, ip, created_at FROM login_events "
-            "ORDER BY id DESC LIMIT 30")]
+            "ORDER BY id DESC LIMIT 30").fetchall()]
     online = [
         {"id": r[0], "name": r[1] or "", "email": r[2] or "",
          "provider": r[3] or "", "last_seen": r[4] or ""}
         for r in conn.execute(
             f"SELECT u.id, u.name, u.email, {_PROVIDER_FALLBACK}, u.last_seen "
             "FROM users u WHERE u.last_seen >= datetime('now','-5 minutes') "
-            "ORDER BY u.last_seen DESC")]
+            "ORDER BY u.last_seen DESC").fetchall()]
     users = [
         {"id": r[0], "name": r[1] or "", "email": r[2] or "",
          "provider": r[3] or "", "created_at": r[4] or "",
@@ -257,7 +258,7 @@ def admin_stats(conn) -> dict:
             f"SELECT u.id, u.name, u.email, {_PROVIDER_FALLBACK}, "
             "u.created_at, u.last_seen, "
             "(SELECT COUNT(*) FROM login_events e WHERE e.user_id=u.id) "
-            "FROM users u ORDER BY u.created_at DESC")]
+            "FROM users u ORDER BY u.created_at DESC").fetchall()]
     return {
         "totals": {"users": total_users, "logins_24h": logins_24h,
                    "logins_7d": logins_7d, "online_now": online_now},
@@ -546,7 +547,7 @@ def users_with_github(conn) -> list:
     ensure_schema(conn)
     try:
         return [r[0] for r in conn.execute(
-            "SELECT user_id FROM user_github WHERE github_token<>''")]
+            "SELECT user_id FROM user_github WHERE github_token<>''").fetchall()]
     except Exception:
         return []
 
