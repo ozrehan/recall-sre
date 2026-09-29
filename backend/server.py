@@ -857,6 +857,117 @@ class Handler(BaseHTTPRequestHandler):
                           "watch its CI runs for you."),
                 "via": "fallback",
             })
+        if path == "/api/chat/plan-edit":
+            # Autonomous code edit: the user describes a change in plain words.
+            # Trace picks the repo + file, generates the new content, and returns
+            # a diff for approval. The actual commit goes through /api/repo/commit
+            # (new branch + PR, never main).
+            uid = self._require_uid()
+            if not uid:
+                return
+            try:
+                import json as _json
+                import difflib as _difflib
+                token = self.gh_token_for(uid)
+                repos = self.gh_repos_for(uid)
+                if not token:
+                    return self._send(400, {"error": "connect_github"})
+                if not repos:
+                    return self._send(400, {"error": "no_repos"})
+                msg = (body.get("message") or "").strip()
+                if not msg:
+                    return self._send(400, {"error": "empty message"})
+                key = os.environ.get("GROQ_API_KEY")
+                if not key:
+                    return self._send(500, {"error": "AI is not configured right now"})
+                from backend.llm.groq import groq_chat
+
+                def _plan(system, user):
+                    raw = groq_chat(key, system, user[:4000], max_tokens=300).strip()
+                    if raw.startswith("```"):
+                        raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+                    try:
+                        return _json.loads(raw)
+                    except Exception:
+                        m = re.search(r"\{.*\}", raw, re.S)
+                        return _json.loads(m.group(0)) if m else {}
+
+                # 1) pick the repo
+                repo = None
+                ml = msg.lower()
+                for r in repos:
+                    if r.lower() in ml or r.split("/")[-1].lower() in ml:
+                        repo = r
+                        break
+                if not repo and len(repos) == 1:
+                    repo = repos[0]
+                if not repo:
+                    pick = _plan(
+                        "You pick which GitHub repo the user means. "
+                        "Output ONLY JSON: {\"repo\": \"owner/name\"} or "
+                        "{\"clarify\": \"question for the user\"}.",
+                        "Repos: " + ", ".join(repos) + "\nRequest: " + msg)
+                    if pick.get("clarify"):
+                        return self._send(200, {"clarify": pick["clarify"]})
+                    repo = pick.get("repo") if pick.get("repo") in repos else None
+                    if not repo:
+                        return self._send(200, {"clarify":
+                            "Which repo should I change? (" + ", ".join(repos) + ")"})
+                # 2) pick the file
+                meta = _gh_api.get_repo(repo, token)
+                base = meta.get("default_branch") or "main"
+                try:
+                    tree = _gh_api.repo_tree(repo, base, token)
+                except Exception:
+                    tree = []
+                if not tree:
+                    return self._send(500, {"error": "could not read that repo's files"})
+                plan = _plan(
+                    "You are a code-edit planner. Output ONLY JSON, no other text: "
+                    "{\"path\": \"path/to/file\", \"change\": \"one-sentence description\", "
+                    "\"new_file\": false} or {\"clarify\": \"question\"}. "
+                    "new_file=true only if the user wants a brand-new file. "
+                    "Choose only from the listed files.",
+                    "Repo: " + repo + "\nFiles:\n" + "\n".join(tree) +
+                    "\n\nRequest: " + msg)
+                if plan.get("clarify") or not plan.get("path"):
+                    return self._send(200, {"clarify": plan.get("clarify") or
+                        "Which file should I change?"})
+                fpath = plan["path"].strip().lstrip("/")
+                if fpath not in tree and not plan.get("new_file"):
+                    return self._send(200, {"clarify":
+                        "I couldn't find that file — which file should I change?"})
+                # 3) generate the new content
+                old_content = ""
+                if not plan.get("new_file"):
+                    f = _gh_api.get_file(repo, fpath, base, token)
+                    old_content = (f or {}).get("content") or ""
+                new_content = groq_chat(
+                    key,
+                    "You are a code editor. Apply the requested change to the file. "
+                    "Output ONLY the complete new file content — no explanations, "
+                    "no code fences, no markdown.",
+                    "Requested change: " + plan.get("change", msg) +
+                    "\nFile: " + fpath +
+                    ("\n\nCurrent content:\n" + old_content[:12000]
+                     if old_content else "\n\nCreate this new file from scratch."),
+                    max_tokens=4000).strip()
+                if new_content.startswith("```"):
+                    new_content = new_content.split("\n", 1)[1].rsplit("```", 1)[0]
+                if not new_content:
+                    return self._send(500, {"error": "the AI came back empty — try again"})
+                diff = "\n".join(_difflib.unified_diff(
+                    old_content.splitlines(), new_content.splitlines(),
+                    fromfile="before", tofile="after", lineterm=""))[:6000]
+                return self._send(200, {
+                    "repo": repo, "path": fpath,
+                    "change": plan.get("change", msg),
+                    "new_file": bool(plan.get("new_file")),
+                    "diff": diff, "new_content": new_content,
+                    "suggested_message": (plan.get("change") or "Update " + fpath)[:120],
+                })
+            except Exception as e:
+                return self._send(500, {"error": str(e)[:200]})
         if path in ("/api/profile/follow", "/api/profile/unfollow"):
             uid = self._require_uid()
             if not uid:
