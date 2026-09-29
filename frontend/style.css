@@ -694,3 +694,11 @@ body { font-family: var(--sans); color: var(--text); background: var(--bg); over
 @keyframes wolfbob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
 .wolf-ava .wolf-eyes { animation: wolfblink 4.2s infinite; transform-box: fill-box; transform-origin: center; }
 @keyframes wolfblink { 0%, 93%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.06); } }
+
+/* ---------- code-edit diff preview ---------- */
+.diff-card { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-top: 6px; }
+.diff-card pre { margin: 0; max-height: 260px; overflow: auto; background: #0b0d10; padding: 8px 0; font-size: 12px; line-height: 1.5; }
+.dp-line { padding: 0 12px; white-space: pre-wrap; word-break: break-word; color: #c9d1d9; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.dp-add { background: rgba(46, 160, 67, 0.18); color: #7ee787; }
+.dp-del { background: rgba(248, 81, 73, 0.15); color: #ffa198; }
+.dp-hunk { color: #79c0ff; }
