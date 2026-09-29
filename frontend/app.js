@@ -204,7 +204,62 @@ function onAuthSuccess(data) {
   rememberUser(data.user);
   authUser = data.user;
   renderAuthSlot(); renderActAuth(); closeLoginSheet();
+  updateAdminNav();
   refreshProfile();
+}
+
+/* ---------- admin dashboard (owner only) ---------- */
+function updateAdminNav() {
+  const el = $("navAdmin");
+  if (el) el.style.display = (authUser && authUser.is_admin) ? "" : "none";
+}
+function ago(iso) {
+  if (!iso) return "—";
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return "now";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
+}
+async function openAdminModal() {
+  openInfo("Admin");
+  try {
+    const d = await api("/api/admin/stats");
+    const t = d.totals || {};
+    const prov = d.by_provider || {};
+    const provRows = Object.keys(prov).map((p) =>
+      `<div class="memrow"><span>${esc(p)}</span><b>${prov[p]}</b></div>`).join("");
+    const online = d.online || [];
+    const recent = d.recent_logins || [];
+    const users = d.users || [];
+    $("infoBody").innerHTML = `
+      <div class="membox">
+        <div class="memrow"><span>members</span><b>${t.users ?? "—"}</b></div>
+        <div class="memrow"><span>online now</span><b>${t.online_now ?? "—"}</b></div>
+        <div class="memrow"><span>logins · 24h</span><b>${t.logins_24h ?? "—"}</b></div>
+        <div class="memrow"><span>logins · 7d</span><b>${t.logins_7d ?? "—"}</b></div>
+      </div>
+      <p class="info-hint">Logins by provider (all time)</p>
+      <div class="membox">${provRows || `<p class="info-hint">No logins recorded yet.</p>`}</div>
+      <p class="info-hint">Live now (${online.length})</p>
+      ${online.length ? online.map((u) => `
+        <div class="info-row" style="cursor:default">
+          <span class="info-row-t">${esc(u.name || u.email)}</span>
+          <span class="info-row-s">${esc(u.email)} · ${esc(u.provider)} · ${ago(u.last_seen)}</span>
+        </div>`).join("") : `<p class="info-hint">Nobody online right now.</p>`}
+      <p class="info-hint">All members (${users.length})</p>
+      ${users.map((u) => `
+        <div class="info-row" style="cursor:default">
+          <span class="info-row-t">${esc(u.name || u.email)}</span>
+          <span class="info-row-s">${esc(u.email)} · ${esc(u.provider)} · ${u.logins} logins · seen ${ago(u.last_seen)}</span>
+        </div>`).join("")}
+      <p class="info-hint">Recent logins</p>
+      ${recent.length ? recent.map((l) => `
+        <div class="info-row" style="cursor:default">
+          <span class="info-row-t">${esc(l.email)}</span>
+          <span class="info-row-s">${esc(l.provider)} · ${esc(l.ip)} · ${ago(l.created_at)}</span>
+        </div>`).join("") : `<p class="info-hint">No login events yet.</p>`}`;
+  } catch (e) { $("infoBody").innerHTML = `<p class="info-hint">Couldn't load admin stats.</p>`; }
 }
 
 /* "Login with GitHub": after GitHub redirects back with ?github=login&token=,
@@ -315,6 +370,7 @@ async function doLogout() {
   try { await fetch("/api/auth/logout", { method: "POST" }); } catch (e) {}
   localStorage.removeItem("tm_token");
   authUser = null; profData = null;
+  updateAdminNav();
   renderAuthSlot(); renderActAuth();
 }
 
@@ -323,7 +379,7 @@ async function authMe() {
   if (!t) return;
   try {
     const r = await fetch("/api/auth/me", { headers: { Authorization: "Bearer " + t } });
-    if (r.ok) authUser = (await r.json()).user;
+    if (r.ok) { authUser = (await r.json()).user; updateAdminNav(); }
     else localStorage.removeItem("tm_token");
   } catch (e) {}
 }
@@ -1266,6 +1322,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("navDb").addEventListener("click", () => openDbModal());
   $("navScheduled").addEventListener("click", () => openScheduledModal());
   $("navSettings").addEventListener("click", () => setModal(true));
+  $("navAdmin").addEventListener("click", () => openAdminModal());
+  updateAdminNav();
   $("infoClose").addEventListener("click", closeInfo);
   $("infoScrim").addEventListener("click", closeInfo);
   $("sbSearchBtn").addEventListener("click", () => {
