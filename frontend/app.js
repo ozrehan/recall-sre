@@ -523,6 +523,14 @@ async function refreshGithubPanel() {
       : "Read only: Trace watches and reports, but never changes your repos.";
     const firstRepo = repos[0] || st.github_repo;
     $("ghRepoLink").href = firstRepo ? "https://github.com/" + firstRepo : "#";
+    const pushSel = $("pushRepoSel");
+    if (pushSel) {
+      const cur = pushSel.value;
+      pushSel.innerHTML = repos.length
+        ? repos.map((r) => `<option value="${esc(r)}">${esc(r)}</option>`).join("")
+        : `<option value="">No repos connected</option>`;
+      if (cur && repos.includes(cur)) pushSel.value = cur;
+    }
     const gc = st.github_connection || {};
     $("ghOauthBtn").style.display = st.oauth_connected ? "none" : "";
     $("ghDisconnectBtn").style.display = st.oauth_connected ? "" : "none";
@@ -635,6 +643,45 @@ function bindPanels() {
     $("ghScanBtn").textContent = "Scan now";
     refreshGithubPanel();
   });
+  $("pushLoadBtn").addEventListener("click", async () => {
+    const repo = $("pushRepoSel").value, path = $("pushFilePath").value.trim();
+    const st = $("pushStatus");
+    if (!repo || !path) { st.textContent = "Pick a repo and enter a file path."; return; }
+    st.textContent = "Loading…";
+    try {
+      const r = await tmApi.get("/api/repo/file?repo=" + encodeURIComponent(repo) +
+                                "&path=" + encodeURIComponent(path));
+      if (r.error) { st.textContent = r.error === "file not found"
+        ? "New file — write the content below, then commit."
+        : ("Error: " + r.error);
+        if (r.error === "file not found") $("pushFileContent").value = ""; return; }
+      $("pushFileContent").value = r.content || "";
+      st.textContent = "Loaded " + r.path + " from " + r.ref + ". Edit, then commit.";
+    } catch (e) { st.textContent = "Could not load the file."; }
+  });
+  $("pushCommitBtn").addEventListener("click", async () => {
+    const repo = $("pushRepoSel").value, path = $("pushFilePath").value.trim();
+    const content = $("pushFileContent").value;
+    const message = $("pushCommitMsg").value.trim() || ("Update " + path + " via TraceMind");
+    const st = $("pushStatus"), btn = $("pushCommitBtn");
+    if (!repo || !path) { st.textContent = "Pick a repo and enter a file path."; return; }
+    btn.disabled = true; btn.textContent = "Committing…";
+    st.textContent = "";
+    try {
+      const r = await tmApi.post("/api/repo/commit",
+        {repo, files: [{path, content}], message});
+      if (r.error) { st.textContent = "Error: " + r.error; }
+      else {
+        st.innerHTML = "Committed to branch <b>" + esc(r.branch) + "</b>. " +
+          (r.pr_url ? `<a href="${esc(r.pr_url)}" target="_blank" rel="noopener">Review PR #${r.pr_number} ↗</a> — merge it to update ${esc(r.base)}.`
+                    : "No PR opened.");
+        $("pushCommitMsg").value = "";
+      }
+    } catch (e) { st.textContent = "Commit failed — check your connection."; }
+    btn.disabled = false; btn.textContent = "Commit & open PR";
+  });
+  $("ghScanBtn").textContent = "Scan now";
+  refreshGithubPanel();
   $("scanIntervalBtn").addEventListener("click", async () => {
     await tmApi.post("/api/plugins/interval",
                    {minutes: parseInt($("scanInterval").value, 10)});
