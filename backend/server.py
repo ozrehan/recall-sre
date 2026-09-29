@@ -550,8 +550,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/github/oauth/start":
             if not (GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET):
                 return self._send(500, {"error": "GitHub OAuth not configured"})
-            host = self.headers.get("Host", "")
-            cb = "https://" + host + "/api/github/oauth/callback"
+            # Canonical callback: GitHub OAuth Apps allow only ONE registered
+            # callback URL, so every host uses the primary domain. A login that
+            # starts on another host (e.g. the onrender URL) finishes here.
+            cb = "https://tracemind.run.place/api/github/oauth/callback"
             qs0 = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             login_mode = (qs0.get("mode") or [""])[0] == "login"
             nonce = (qs0.get("nonce") or [""])[0]
